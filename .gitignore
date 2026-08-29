@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+
+# This project's own scratch/exploration area — not part of the shipped
+# tool, kept out of git per project convention.
+/experiments/
+
+# Local session/credential state — never commit these
+*.session.json
+.fs_session.json
+*.har
+
+# Built distributable, and its pinned build venv — scripts/build-release.sh
+/dist/
+/build/

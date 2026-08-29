@@ -1,0 +1,10 @@
+fs -- desk booking at the command line, via Floorsense
+
+This distribution bundles third-party open-source packages. Each is used
+unmodified, under its own licence. See THIRD-PARTY-NOTICES.txt for the
+full list, each package's copyright notice, and full licence text
+(verbatim from each package's own distribution). Generic licence-type
+reference copies are also kept under LICENSES/.
+
+Run `fs --licences` to print this information from the built tool
+directly.

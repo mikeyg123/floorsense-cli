@@ -1,0 +1,235 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/app/floorplan-list"
+  },
+  "status": 200,
+  "content_type": "application/json; charset=utf-8",
+  "body": {
+    "result": true,
+    "type": "response",
+    "info": [
+      {
+        "planid": 5,
+        "name": "Level-5",
+        "location1": "Example Auckland",
+        "location2": "123 Example Street",
+        "location3": "Level 5",
+        "imgname": "floorplan_level6_v28.png",
+        "imgwidth": 8244,
+        "imgheight": 5824,
+        "deskloc": "floorplan_level6_v28.json",
+        "status": 1,
+        "occupancy": 0,
+        "sortorder": 0,
+        "timezone": "Pacific/Auckland"
+      },
+      {
+        "planid": 3,
+        "name": "Level 5",
+        "location1": "Example Auckland",
+        "location2": "123 Example Street",
+        "location3": "Level 5",
+        "imgname": "floorplan_level5_v130.png",
+        "imgwidth": 3041,
+        "imgheight": 2013,
+        "deskloc": "floorplan_level5_v130.json",
+        "status": 0,
+        "occupancy": 0,
+        "sortorder": 0,
+        "timezone": "Pacific/Auckland",
+        "deskRanges": [
+          {
+            "endValue": "232",
+            "startValue": "01",
+            "prefix": "L5.D.",
+            "suffix": ""
+          },
+          {
+            "endValue": "238",
+            "startValue": "233",
+            "prefix": "L5.D.",
+            "suffix": ""
+          },
+          {
+            "endValue": "",
+            "startValue": "",
+            "prefix": "L5.D.163A",
+            "suffix": ""
+          },
+          {
+            "endValue": "",
+            "startValue": "",
+            "prefix": "L5.D.174A",
+            "suffix": ""
+          },
+          {
+            "endValue": "",
+            "startValue": "",
+            "prefix": "L5.D.175A",
+            "suffix": ""
+          },
+          {
+            "endValue": "",
+            "startValue": "",
+            "prefix": "L5.D.180A",
+            "suffix": ""
+          },
+          {
+            "endValue": "",
+            "startValue": "",
+            "prefix": "L5.D.181A",
+            "suffix": ""
+          },
+          {
+            "endValue": "",
+            "startValue": "",
+            "prefix": "L5.D.192A",
+            "suffix": ""
+          },
+          {
+            "endValue": "",
+            "startValue": "",
+            "prefix": "L5.D.193A",
+            "suffix": ""
+          },
+          {
+            "endValue": "",
+            "startValue": "",
+            "prefix": "L5.D.198A",
+            "suffix": ""
+          },
+          {
+            "endValue": "",
+            "startValue": "",
+            "prefix": "L5.D.68A",
+            "suffix": ""
+          },
+          {
+            "endValue": "",
+            "startValue": "",
+            "prefix": "L5.D.75A",
+            "suffix": ""
+          },
+          {
+            "endValue": "",
+            "startValue": "",
+            "prefix": "L5.D.137A",
+            "suffix": ""
+          },
+          {
+            "endValue": "",
+            "startValue": "",
+            "prefix": "L5.D.140A",
+            "suffix": ""
+          },
+          {
+            "endValue": "D",
+            "startValue": "A",
+            "prefix": "L5.D.141",
+            "suffix": ""
+          },
+          {
+            "endValue": "",
+            "startValue": "",
+            "prefix": "L5.D.145A",
+            "suffix": ""
+          },
+          {
+            "endValue": "",
+            "startValue": "",
+            "prefix": "L5.D.156A",
+            "suffix": ""
+          },
+          {
+            "endValue": "",
+            "startValue": "",
+            "prefix": "L5.D.157A",
+            "suffix": ""
+          },
+          {
+            "endValue": "",
+            "startValue": "",
+            "prefix": "L5.D.162A",
+            "suffix": ""
+          },
+          {
+            "endValue": "",
+            "startValue": "",
+            "prefix": "L5.D.213A",
+            "suffix": ""
+          },
+          {
+            "endValue": "",
+            "startValue": "",
+            "prefix": "L5.D.216A",
+            "suffix": ""
+          },
+          {
+            "endValue": "",
+            "startValue": "",
+            "prefix": "L5.D.236A",
+            "suffix": ""
+          },
+          {
+            "endValue": "",
+            "startValue": "",
+            "prefix": "L5.D.235A",
+            "suffix": ""
+          }
+        ]
+      },
+      {
+        "planid": 4,
+        "name": "Level 6",
+        "location1": "Example Auckland",
+        "location2": "123 Example Street",
+        "location3": "Level 6",
+        "imgname": "floorplan_level6_v48.png",
+        "imgwidth": 8244,
+        "imgheight": 5824,
+        "deskloc": "floorplan_level6_v48.json",
+        "status": 0,
+        "occupancy": 0,
+        "sortorder": 0,
+        "timezone": "Pacific/Auckland",
+        "deskRanges": [
+          {
+            "endValue": "99",
+            "startValue": "01",
+            "prefix": "L6.D.",
+            "suffix": ""
+          },
+          {
+            "endValue": "102",
+            "startValue": "100",
+            "prefix": "L6.D.",
+            "suffix": ""
+          },
+          {
+            "endValue": "D",
+            "startValue": "A",
+            "prefix": "L6.D.01",
+            "suffix": ""
+          }
+        ]
+      },
+      {
+        "planid": 1,
+        "name": "Newmarket - Level 1",
+        "location1": "Example Auckland",
+        "location2": "123 Example Street",
+        "location3": "Pilot",
+        "imgname": "floorplan_pilot_v6.png",
+        "imgwidth": 3690,
+        "imgheight": 2552,
+        "deskloc": "floorplan_pilot_v6.json",
+        "status": 1,
+        "occupancy": 0,
+        "sortorder": 0,
+        "timezone": "Pacific/Auckland"
+      }
+    ]
+  },
+  "note": "Captured verbatim by experiments/07_capture_shapes.py. Real data, not scrubbed. Local to this machine."
+}

@@ -1,0 +1,85 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/app/booking-list",
+    "params": {
+      "bktype": "advance",
+      "days": 30
+    }
+  },
+  "status": 200,
+  "content_type": "application/json; charset=utf-8",
+  "body": {
+    "result": true,
+    "type": "response",
+    "info": [
+      {
+        "bkid": "00853044",
+        "uid": "47044577",
+        "cid": 2,
+        "key": "L5.D.216A",
+        "bktype": "advance",
+        "start": 1787774400,
+        "finish": 1787803200,
+        "created": 1786916830,
+        "released": 0,
+        "active": false,
+        "confirmed": false,
+        "privacy": false,
+        "releasecode": 0,
+        "conftime": 0,
+        "confmethod": 0,
+        "planid": 3,
+        "groupid": 11,
+        "confexpiry": 1787779800,
+        "zoneid": 0,
+        "updated": 1786916830
+      },
+      {
+        "bkid": "33849658",
+        "uid": "47044577",
+        "cid": 2,
+        "key": "L5.D.236A",
+        "bktype": "advance",
+        "start": 1787515200,
+        "finish": 1787544000,
+        "created": 1786916787,
+        "released": 0,
+        "active": false,
+        "confirmed": false,
+        "privacy": false,
+        "releasecode": 0,
+        "conftime": 0,
+        "confmethod": 0,
+        "planid": 3,
+        "groupid": 11,
+        "confexpiry": 1787520600,
+        "zoneid": 0,
+        "updated": 1786916787
+      },
+      {
+        "bkid": "15918578",
+        "uid": "47044577",
+        "cid": 2,
+        "key": "L5.D.236A",
+        "bktype": "advance",
+        "start": 1787688000,
+        "finish": 1787716800,
+        "created": 1786916813,
+        "released": 0,
+        "active": false,
+        "confirmed": false,
+        "privacy": false,
+        "releasecode": 0,
+        "conftime": 0,
+        "confmethod": 0,
+        "planid": 3,
+        "groupid": 11,
+        "confexpiry": 1787693400,
+        "zoneid": 0,
+        "updated": 1786916813
+      }
+    ]
+  },
+  "note": "Captured verbatim by experiments/07_capture_shapes.py. Real data, not scrubbed. Local to this machine."
+}

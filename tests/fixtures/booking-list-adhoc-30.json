@@ -1,0 +1,18 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/app/booking-list",
+    "params": {
+      "bktype": "adhoc",
+      "days": 30
+    }
+  },
+  "status": 200,
+  "content_type": "application/json; charset=utf-8",
+  "body": {
+    "result": true,
+    "type": "response",
+    "info": []
+  },
+  "note": "Captured verbatim by experiments/07_capture_shapes.py. Real data, not scrubbed. Local to this machine."
+}

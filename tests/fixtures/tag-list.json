@@ -1,0 +1,13 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/app/tag-list",
+    "body": {
+      "name": "baker"
+    }
+  },
+  "status": 200,
+  "content_type": "application/json; charset=utf-8",
+  "body": [],
+  "note": "Captured verbatim by experiments/07_capture_shapes.py. Real data, not scrubbed. Local to this machine."
+}
