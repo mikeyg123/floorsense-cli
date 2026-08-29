@@ -89,6 +89,15 @@ module's docstring before changing its behavior rather than guessing.
   under `floorplans/`, one module per workplace, so a new deployment can
   add a map without touching rendering code.
 
+## Code style
+
+Comments and docstrings should be minimal and concise: only note gotchas or
+things that aren't obvious from reading the code (why it's shaped this way,
+an API quirk, a bug it works around). Don't narrate what the code visibly
+does, and don't record history — past decisions, alternatives considered, or
+what a prior version did. That belongs in `docs/` or PR descriptions, not
+inline.
+
 ## Testing
 
 - `tests/fixtures/*.json` are real captured API responses, not hand-written.

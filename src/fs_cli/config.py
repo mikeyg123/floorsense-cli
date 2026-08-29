@@ -45,11 +45,8 @@ DEFAULT_DOMAIN = "example.com"
 DEFAULT_BOOK_AHEAD_DAYS = 10
 
 #: The `[groups]` name `fs book`/`fs at`/etc. reach for when given no desk
-#: or group of their own. Hand-editable like any other group name -- there
-#: is nothing hardcoded about it beyond this shipped default (PLAN.md's
-#: "Next up", Group D). Was a literal `"favourite"` sprinkled through every
-#: command module until this landed; now every module reads
-#: `Config.default_group` instead.
+#: or group of their own. Hand-editable like any other group name -- read
+#: via `Config.default_group`, not hardcoded elsewhere.
 DEFAULT_GROUP_NAME = "preferred"
 
 DIR_MODE = 0o700

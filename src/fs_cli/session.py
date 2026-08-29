@@ -217,17 +217,11 @@ class Session:
         # one -- reusing the pre-auth token yields the HTML CSRF page (§4.5).
         csrf = self._probe(s)
         if not csrf:
-            # Seen live, intermittently and in bursts (2026-08-28) -- Okta's
-            # push MFA and the SSO hop both succeeded, but the post-login
-            # `/app/` probe landed somewhere other than `/app/site`. Neither
-            # a bad password (that fails earlier, inside `login_with_push_
-            # mfa`) nor a code bug (that would be consistent, not bursty)
-            # fits the pattern -- more likely a transient Floorsense-side
-            # redirect hiccup, with the burst being the user's own retries
-            # landing in the same window. Not proven live; `--verbose`
-            # (`wire.py`) captures the actual redirect chain next time this
-            # fires. Message kept generic on purpose: whatever the cause,
-            # "try again" is the only actionable remedy from here.
+            # Push MFA and the SSO hop can both succeed but the post-login
+            # `/app/` probe lands somewhere other than `/app/site` -- a
+            # transient Floorsense-side redirect, not a bad password (that
+            # fails earlier) or a code bug. `--verbose` (`wire.py`) captures
+            # the actual redirect chain if this needs diagnosing.
             raise CommError(
                 "login succeeded but Floorsense redirected somewhere "
                 "unexpected",

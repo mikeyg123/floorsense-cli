@@ -102,9 +102,9 @@ def floor_aliases(names):
     always an alias (`"Level 5"` -> `"level5"`); if the name's last
     whitespace-separated word is a bare integer, that integer alone is
     also an alias (`"5"`) -- together these reproduce this workplace's
-    exact `"5"`/`"level5"` pair (what `FLOOR_ALIASES` used to hardcode)
-    while generalising to any floor name a different building happens to
-    use. First floor wins on a collision (e.g. two towers both naming a
+    exact `"5"`/`"level5"` pair while generalising to any floor name a
+    different building happens to use. First floor wins on a collision
+    (e.g. two towers both naming a
     floor "Level 5") -- rare enough within one building not to try to
     auto-disambiguate; see docs/floorplan-map-manual.md.
     """
@@ -578,16 +578,14 @@ def crop_window(n_cols, highlight_cols, terminal_columns):
 #: symmetrically, before scrolling back) in `scroll_window`. Small enough
 #: not to eat into the visible grid on a narrow terminal, big enough that
 #: the wall just past the cursor is actually on screen rather than the
-#: cursor sitting dead on the last visible cell. Was 3 -- per direct user
-#: feedback that was still one cell short of showing the wall on some
-#: floors/terminal widths.
+#: cursor sitting dead on the last visible cell.
 SCROLL_MARGIN = 4
 
 #: Column-scroll (left/right) run-way, one cell more than the shared
-#: `SCROLL_MARGIN` -- per direct user feedback that horizontal scrolling
-#: specifically still needed an extra cell to keep a wall in view, where
-#: vertical scrolling didn't. Row scrolling keeps using `SCROLL_MARGIN`
-#: (see the `scroll_window` call for rows, further down).
+#: `SCROLL_MARGIN` -- horizontal scrolling needs the extra cell to keep a
+#: wall in view where vertical scrolling doesn't. Row scrolling keeps
+#: using `SCROLL_MARGIN` (see the `scroll_window` call for rows, further
+#: down).
 SCROLL_MARGIN_COLS = SCROLL_MARGIN + 1
 
 
@@ -927,28 +925,22 @@ def _render_lines(out, grid, desk_kind_positions, left, right,
 
     `cursor_pos`, when given (only `_run_live` has one), gets `out.reverse`
     AND `out.blink` AND `out.bold` layered on top of its cell's own kind
-    colour -- reverse alone still left the cursor indistinguishable from
-    another desk of the same kind at a glance, blink was added on top per
-    direct feedback that reverse alone wasn't obvious enough, and bold on
-    top of THAT per further feedback that the cursor still didn't stand out
-    enough at a glance among a screenful of colour. `"yours"` desks are
-    bolded the same way even when they're not the cursor -- own bookings
-    are the other thing worth finding at a glance, and blending in with
-    every other `attention`-coloured cell defeated that. Not used by
-    `_run_static`, which has no cursor at all.
+    colour -- reverse alone is indistinguishable from another desk of the
+    same kind at a glance, so all three stack to keep the cursor visible
+    among a screenful of colour. `"yours"` desks are bolded the same way
+    even when they're not the cursor, so your own bookings are also
+    findable at a glance rather than blending into every other
+    `attention`-coloured cell. Not used by `_run_static`, which has no
+    cursor at all.
 
     `top`/`bottom` (default: the whole grid, `_run_static`'s only need)
     are `_run_live`'s vertical-scroll counterpart to `left`/`right` -- a
     half-open ROW window, sliced the same way, so a floor taller than the
-    terminal draws only the rows currently in view instead of every row
-    unconditionally (which is what actually reached the terminal before:
-    on a short window the excess just scrolled off natively, taking the
-    header line with it and leaving the cursor to reappear only once the
-    view was scrolled back to the top by hand). `pos` is still built from
-    the ABSOLUTE row index (`r`, not an index into a pre-sliced sub-list),
-    same reasoning as `left` already gets for columns -- `desk_kind_positions`/
-    `cursor_pos` are keyed by the grid's real coordinates regardless of
-    what's currently cropped into view.
+    terminal draws only the rows currently in view. `pos` is still built
+    from the ABSOLUTE row index (`r`, not an index into a pre-sliced
+    sub-list), same reasoning as `left` already gets for columns --
+    `desk_kind_positions`/`cursor_pos` are keyed by the grid's real
+    coordinates regardless of what's currently cropped into view.
     """
     bottom = len(grid) if bottom is None else bottom
     lines = []
@@ -993,9 +985,9 @@ def _initial_cursor_key(grid, desk_positions, desk_kind_positions,
          default group, in its preference order -- same order `fs book`
          ranks against) that's both on THIS floor's `desk_positions` and
          currently `"free"`. A group desk elsewhere, or one that's booked/
-         restricted here, is skipped rather than landed on -- direct user
-         feedback was that starting on a desk you can't actually book was
-         more confusing than starting somewhere plain.
+         restricted here, is skipped rather than landed on -- starting on
+         a desk you can't actually book is more confusing than starting
+         somewhere plain.
       3. Failing that too (no group configured, none of it on this floor,
          or none of it free), the reading-order-first desk actually
          visible in the initial static crop window -- the original
@@ -1025,20 +1017,15 @@ def _initial_cursor_key(grid, desk_positions, desk_kind_positions,
     return key
 
 
-#: The move/day/floor/quit keys, shared by every `_status_line` branch --
-#: feedback was that the day and floor keys weren't discoverable at all
-#: (`n`/`p` and `5`/`6` were only ever documented in `_run_live`'s own
-#: docstring), so they're spelled out here right alongside the
-#: already-shown move/quit hints. Floor keys are hardcoded to `5`/`6`
-#: rather than derived from `floor_aliases()` -- that function's output
-#: also holds each floor's full-name spelling (`"level5"`), which isn't a
-#: live-view digit key at all, and digit-key switching can only ever
-#: reach a floor whose alias happens to be a single bare digit in the
-#: first place (see the digit-key handler below). This hint is accurate
-#: for THIS workplace's two floors; a building with different floor
-#: names/numbers may show a hint that doesn't match what actually works
-#: via digit keys -- an existing, pre-generalisation limitation, not a
-#: new one.
+#: The move/day/floor/quit keys, shared by every `_status_line` branch.
+#: Floor keys are hardcoded to `5`/`6` rather than derived from
+#: `floor_aliases()` -- that function's output also holds each floor's
+#: full-name spelling (`"level5"`), which isn't a live-view digit key at
+#: all, and digit-key switching can only ever reach a floor whose alias
+#: happens to be a single bare digit (see the digit-key handler below).
+#: This hint is accurate for THIS workplace's two floors; a building with
+#: different floor names/numbers may show a hint that doesn't match what
+#: actually works via digit keys.
 _NAV_HINT = "[↑↓←→] move  [n/p] day  [5/6] floor  [q] quit"
 
 
@@ -1047,9 +1034,8 @@ def _status_line(out, cursor_key, kind, message, occupant=None):
     background fetch has landed -- see `_spawn_occupant_lookup`), names who
     has a "booked" desk instead of the bare "unavailable" every other
     non-free, non-yours kind still gets -- as just the name (`{label} --
-    {occupant}`), not "booked by {occupant}": feedback was that "booked"
-    was redundant once a name is right there (the desk's colour/glyph
-    already says "booked"; the line only needs to add WHO). `None` (no
+    {occupant}`), not "booked by {occupant}": the desk's colour/glyph
+    already says "booked", so the line only needs to add WHO. `None` (no
     fetch yet, no uid to look up, or `desk_states` wasn't threaded through
     at all) keeps the "unavailable" wording, so a caller that doesn't opt
     into the feature sees no change."""
@@ -1241,16 +1227,13 @@ def _run_live(ctx, planid, target_date, grid, highlight_positions,
 
     Each frame is written into the alternate screen buffer (entered once
     on the way in, left once on the way out) with a cursor-home plus a
-    per-line clear-to-end-of-line, not a full-screen clear every keypress
-    -- direct user feedback was that the old `\\x1b[2J` flickered visibly.
-    `_render_lines`'s `cursor_pos` argument also fixes a second piece of
-    the same feedback (the cursor being invisible) by reverse-videoing
-    (and, per later feedback that reverse alone still wasn't obvious
-    enough, blinking) that one cell. The alt-screen entry sequence also
-    hides the REAL terminal cursor (`\\x1b[?25l`, restored with `\\x1b[?25h`
-    on the way out) -- left visible, it sits blinking at the end of the
-    status line and reads as an invitation to type, which nothing here
-    ever reads.
+    per-line clear-to-end-of-line, not a full-screen clear every keypress,
+    to avoid a visible flicker. `_render_lines`'s `cursor_pos` argument
+    makes the cursor itself visible by reverse-videoing and blinking that
+    one cell. The alt-screen entry sequence also hides the REAL terminal
+    cursor (`\\x1b[?25l`, restored with `\\x1b[?25h` on the way out) -- left
+    visible, it sits blinking at the end of the status line and reads as
+    an invitation to type, which nothing here ever reads.
 
     `desk_states` (a `Catalog.availability()` result, threaded through
     from `cmd_map` and re-threaded from `_refresh` after every write) is
@@ -1261,8 +1244,8 @@ def _run_live(ctx, planid, target_date, grid, highlight_positions,
     session for that background fetch, so a session dying mid-browse
     can't trigger an interactive relogin prompt from a daemon thread
     while this loop owns the tty). Optional and `None`-safe: a caller
-    that doesn't pass `desk_states` gets exactly phase 3b's old
-    "unavailable" wording, no lookup attempted.
+    that doesn't pass `desk_states` gets the plain "unavailable" wording,
+    no lookup attempted.
 
     `read_key`/`stdin`/`initial_cursor_key`/`spawn` are all injectable
     (defaults: `keyread.read_key`, `sys.stdin`, the design spec's own
@@ -1336,20 +1319,17 @@ def _run_live(ctx, planid, target_date, grid, highlight_positions,
     last_lines = None       # the most recent frame, reprinted once on exit
 
     # `\x1b[?25l` also hides the real terminal cursor -- left visible and
-    # blinking at the bottom of the status line, direct user feedback was
-    # that it reads as "you can type a message here", which nothing in
-    # this loop ever reads from. Restored (`\x1b[?25h`) in the `finally`
-    # below so quitting never leaves a real terminal hidden-cursor.
+    # blinking at the bottom of the status line, it reads as "you can type
+    # a message here", which nothing in this loop ever reads from.
+    # Restored (`\x1b[?25h`) in the `finally` below so quitting never
+    # leaves a real terminal hidden-cursor.
     out.prompt("\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[?25l")
     # Injectable so tests keep the exact `columns`/`rows` they passed in on
     # every frame (the default closes over those two fixed values and
     # never changes them); the real `cmd_map` call site passes one that
-    # re-queries `shutil.get_terminal_size()` fresh every frame instead --
-    # see `terminal_size`. Without that, a mid-session resize was invisible
-    # to this loop: `columns` (and, before vertical scroll existed, the
-    # complete lack of a `rows` equivalent) stayed frozen at whatever the
-    # terminal measured on the way IN, so every redraw kept cropping to
-    # the OLD dimensions no matter how the window actually changed.
+    # re-queries `shutil.get_terminal_size()` fresh every frame instead,
+    # so a mid-session resize is picked up rather than cropping frozen
+    # forever to the size measured on the way in -- see `terminal_size`.
     term_size = term_size or (lambda: (columns, rows))
     # Persisted across frames so `scroll_window` can tell "cursor still
     # comfortably inside the current window" from "cursor just crossed the
@@ -1483,12 +1463,11 @@ def _run_live(ctx, planid, target_date, grid, highlight_positions,
                     ctx, planid, target_date)
                 # The floor hasn't changed, so `desk_positions` is the same
                 # layout -- only each desk's KIND (free/booked/yours/etc.)
-                # may differ on the new date. Direct user feedback: the
-                # cursor used to jump to a fresh `_initial_cursor_key` pick
-                # on every date change, which felt like losing your place.
-                # Keep sitting on the same desk; only re-pick if it
-                # genuinely isn't there any more (defensive -- shouldn't
-                # happen on an unchanged floor).
+                # may differ on the new date. Keep the cursor sitting on
+                # the same desk rather than re-picking with
+                # `_initial_cursor_key`; only re-pick if it genuinely
+                # isn't there any more (defensive -- shouldn't happen on
+                # an unchanged floor).
                 if cursor_key not in desk_positions:
                     cursor_key = _initial_cursor_key(
                         grid, desk_positions, desk_kind_positions,

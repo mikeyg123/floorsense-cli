@@ -73,9 +73,6 @@ CROP_BY_FLOOR = {
 # (x0_frac, y0_frac, x1_frac, y1_frac) per segment.
 PARTITIONS_BY_FLOOR = {
     PLANID_LEVEL5: [
-        # Zone A's own internal divider (was `(0.145, 0.06, 0.145, 0.21)`) --
-        # removed per direct user feedback: it's the leftmost line in the
-        # Zone A zone and doesn't correspond to a real partition there.
         (0.28, 0.05, 0.28, 0.21),     # Zone A / Zone B boundary
         (0.2522, 0.4595, 0.3272, 0.4595),
         (0.2522, 0.6433, 0.3272, 0.6433),
@@ -115,11 +112,7 @@ ROOM_BOXES_BY_FLOOR = {
 BLOCK_ADJUSTMENTS_BY_FLOOR = {
     PLANID_LEVEL5: {
         12: (0, 1), 15: (0, 1), 21: (0, 1), 27: (0, 1),
-        # Block 16 -- the horizontal 6-desk group about halfway down the
-        # right wall (L5.D.38/39/...) -- sat one column right of the
-        # groups directly above and below it along that same wall,
-        # per direct user feedback. Shifted left to line back up.
-        16: (0, -1),
+        16: (0, -1),  # lines up with the groups above/below it on the right wall
     },
     PLANID_LEVEL6: {},
 }
