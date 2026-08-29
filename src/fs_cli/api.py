@@ -110,9 +110,8 @@ _HINTS = {
 # NO_VALID_SLOT's usual hint assumes a same-day refusal, but the server
 # collapses "today, before opening time" and "a date already in the past"
 # to the identical "duration not possible" message (§8/§12 of
-# floorsense-api-manual.md) -- confirmed live 2026-08-23 with a booking a
-# week in the past. The client can't tell the two apart from the response,
-# but it CAN tell from the date it sent: PLAN.md item 11.
+# floorsense-api-manual.md). The client can't tell the two apart from the
+# response, but it CAN tell from the date it sent: PLAN.md item 11.
 _PAST_DATE_HINT = "That date has already passed."
 
 

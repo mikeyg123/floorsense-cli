@@ -231,12 +231,10 @@ class Output:
 
     def blink(self, text):
         """SGR blink (`\\x1b[5m`), not a semantic colour -- layered on top
-        of `reverse` for `fs map`'s live-view cursor cell, per direct user
-        feedback that a static reverse-video cell wasn't obvious enough.
-        Depends on terminal support (most modern terminals honour it;
-        a few disable blink outright) -- there's no portable way to detect
-        that from here, so this is a best-effort visual aid, not a
-        guarantee."""
+        of `reverse` for `fs map`'s live-view cursor cell, since a static
+        reverse-video cell alone is too easy to miss. Depends on terminal
+        support (a few terminals disable blink outright); no portable way
+        to detect that from here, so this is best-effort."""
         return self._wrap("blink", text)
 
     # -- semantic colour ------------------------------------------------
@@ -277,21 +275,11 @@ class Output:
 
     def intent(self, text):
         """States what a command resolved to do, before it acts (e.g.
-        "Showing bookings for Jane Doe, Tuesday 25th Aug") -- also how
-        `-next`-style relative dates stop being ambiguous: the resolved day
-        is spelled out before anything else prints.
-
-        Goes to stderr, not stdout, in text mode -- this module's own rule
-        is "warnings go to stderr and data to stdout, so `fs list | ...`
-        stays clean" (module docstring), and an intent line is neither
-        (DECISIONS.md's Group A retrospective): it's not a row
-        `fs list | head -1` should ever return. Suppressed entirely
-        under --json, unlike `warn` -- a
-        --json consumer already gets the resolved values in the payload
-        itself, so there's no `warnings`-array equivalent to preserve it
-        in. Kept as its own method rather than a bare `out.print`/`out.warn`
-        so intent lines stay a single greppable, independently
-        restyleable call shape."""
+        "Showing bookings for Jane Doe, Tuesday 25th Aug") -- how
+        `-next`-style relative dates stop being ambiguous. Goes to stderr
+        in text mode, since it's not a data row `fs list | head -1` should
+        ever return. Suppressed entirely under --json, unlike `warn` --
+        a --json consumer already gets the resolved values in the payload."""
         if not self.json_mode:
             print(text, file=self._stderr)
 

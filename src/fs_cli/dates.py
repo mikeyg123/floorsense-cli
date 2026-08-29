@@ -67,30 +67,12 @@ def _next_weekday(today, target, on_or_after=None):
 
 
 def _next_saturday(today):
-    """The first Saturday STRICTLY AFTER today -- a week away if today
-    already is one, never today itself. This is the anchor the whole
-    `-next` suffix is defined against: one rule, `the first X strictly
-    after the next Saturday`, covers every weekday including Saturday.
-
-    Anchoring on Saturday rather than Monday matters for exactly one
-    starting day: Sunday. The next Monday after a Sunday is tomorrow, so a
-    Monday anchor would make `tue-next` resolve to the same Tuesday the
-    plain (non-`-next`) `tue` already gives -- the whole point of `-next`
-    is to name a date `tue` alone can't reach, so collapsing onto it
-    defeats that. The Saturday anchor is six days out from a Sunday, not
-    one, and (worked through for every other starting weekday) changes
-    nothing else: every non-Sunday, non-Saturday `-next` result is
-    identical either way. Saturday itself must still roll a full week
-    forward, not stay put, for the same reason Sunday must: `sat-next` said
-    on a Saturday has to name a Saturday `-next` alone couldn't already
-    mean, and `_next_weekday`'s default (no `on_or_after`) is exactly
-    "strictly after", so no override is needed here.
-
-    This covers Sunday-as-ANCHOR only. Sunday-as-TARGET (`sun-next`) is a
-    separate case this function cannot handle alone: Saturday and Sunday
-    are adjacent, so this anchor is always exactly one day before any
-    Sunday target -- `parse_date` special-cases that call instead of
-    routing it through here; see the comment at that call site."""
+    """The first Saturday strictly after today. Anchors every `-next`
+    weekday (`the first X strictly after the next Saturday`); Saturday
+    rather than Monday because a Monday anchor would collapse `tue-next`
+    on a Sunday onto plain `tue`'s result. Doesn't handle `sun-next`
+    itself -- `parse_date` special-cases that target since it's adjacent
+    to this anchor."""
     return _next_weekday(today, 5)
 
 
@@ -226,14 +208,8 @@ def fmt_date(d, today):
     """`Today 27th Aug`, `Tomorrow 28th Aug`, else `Monday 24th Aug` -- with
     the year appended only when it isn't the current one. Every date the
     tool prints goes through here; nothing renders a raw dd/mm/yyyy.
-
-    `Today`/`Tomorrow` used to print bare, with no date attached -- fine in
-    isolation, but a table of upcoming bookings (`fs list`) mixes rows that
-    say "Today" with rows that say "Monday 24th Aug", and only the latter
-    tells you which calendar day it is without doing the arithmetic
-    yourself. Appending the same day/month tail every other row already
-    gets keeps `Today`/`Tomorrow` on equal footing with the rest.
-    """
+    `Today`/`Tomorrow` still carry the day/month tail so they stay legible
+    next to weekday rows in a mixed table like `fs list`."""
     tail = f"{_ordinal(d.day)} {_MONTHS[d.month - 1]}"
     if d.year != today.year:
         tail = f"{tail} {d.year}"

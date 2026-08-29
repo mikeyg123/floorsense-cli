@@ -159,9 +159,8 @@ def cmd_book(ctx):
         # group's ordered desk list, no special-casing needed.
         target_keys = desk_targets
         target_shown = ", ".join(out.fmt_desk(k) for k in target_keys)
-        target_label = target_shown  # only ever read on the group branch's
-        # "nothing available in {target_label!r}" reasons; kept in step so
-        # it isn't a dangling reference should that reachability change.
+        target_label = target_shown  # only read by the group branch's
+        # "nothing available in {target_label!r}" reasons
         is_desk_target = True
     else:
         name = (group_targets[0] if group_targets else cfg.default_group)

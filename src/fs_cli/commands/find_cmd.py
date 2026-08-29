@@ -191,8 +191,8 @@ def _search_rows(out, api, names, dates):
 
 
 def _following_rows(out, api, dates):
-    # Floored at 2, not 1: confirmed live (2026-08-25) that `days=1` is a
-    # server edge case, not just the documented top-end cap (§5.1) --
+    # Floored at 2, not 1: `days=1` is a server edge case, not just the
+    # documented top-end cap (§5.1) --
     # `users` comes back fully populated but `days` comes back EMPTY, so
     # every date lookup below would miss and report "unknown" even for
     # today. `days=2` onward behaves correctly and still starts at today,
