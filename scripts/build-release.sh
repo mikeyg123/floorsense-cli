@@ -81,13 +81,27 @@ mkdir -p dist
 # these were never bundled.
 if unzip -l dist/fs | grep -q 'site-packages/cryptography/'; then
     echo "stripping linux-only keyring backend deps from dist/fs"
-    zip -q -d dist/fs \
+    # dist/fs is a zip archive with a "#!/usr/bin/env python3" stub
+    # prepended (that's what makes it directly executable). Two zip quirks
+    # bite here, in order:
+    #   1. `zip -d` insists on a ".zip"-suffixed name for the archive
+    #      argument -- without it, it silently looks for "dist/fs.zip"
+    #      (which doesn't exist) instead of dist/fs, and exits 12
+    #      ("Nothing to do!").
+    #   2. Even renamed, `zip -d` refuses a prepended-stub archive with
+    #      "Zip file structure invalid" until `zip -A` (adjust
+    #      self-extracting-archive offsets) has run against it once.
+    mv dist/fs dist/fs.zip
+    zip -q -A dist/fs.zip
+    zip -q -d dist/fs.zip \
         'site-packages/cryptography*' \
         'site-packages/cffi*' \
         'site-packages/_cffi_backend*' \
         'site-packages/secretstorage*' \
         'site-packages/jeepney*' \
         'site-packages/pycparser*'
+    mv dist/fs.zip dist/fs
+    chmod +x dist/fs
 fi
 
 echo "built dist/fs"
