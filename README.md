@@ -45,6 +45,9 @@ A tagged release build (versioned, built, and published as a GitHub
 Release) only happens when manually triggered from the Actions tab —
 see [Releasing](#releasing) below.
 
+Linux builds of `dist/fs` don't use the OS keychain — `fs` always
+prompts for the password there. `pip install` usage is unaffected.
+
 ## Testing
 
 ```bash

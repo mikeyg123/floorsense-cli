@@ -13,13 +13,6 @@ from .find_cmd import team_member_names
 
 __all__ = ["cmd_status"]
 
-#: Same source `cli.py`'s `--version` reads (`importlib.metadata`, not a
-#: parse of pyproject.toml -- see `build_parser`'s comment for why: this
-#: resolves the same way editable, `uv tool install`-ed, or zipapp'd).
-#: The repo URL isn't in installed metadata by default the same way, so
-#: it's a plain constant here, mirroring `auth.py`'s `FLOORSENSE_ORIGIN`.
-REPO_URL = "https://github.com/example-org/floorsense-cli"
-
 
 def cmd_status(ctx):
     """Identity and session validity. No side effects, and never logs in --
@@ -65,8 +58,7 @@ def cmd_status(ctx):
     out.print(f"{out.label('Teams')}          "
              f"{', '.join(sorted(set(cfg.teams) | {'following'}))}")
     out.print()
-    out.print(f"{out.label('Version')}        fs {fs_version}  "
-             f"{out.muted(REPO_URL)}")
+    out.print(f"{out.label('Version')}        fs {fs_version}")
 
     out.emit({"okta_user": cfg.okta_user, "email": cfg.email,
               "okta_org": cfg.okta_org, "session_live": live,
@@ -77,5 +69,5 @@ def cmd_status(ctx):
               "groups": {k: list(v) for k, v in cfg.groups.items()},
               "teams": {k: team_member_names(v)
                         for k, v in cfg.teams.items()},
-              "version": fs_version, "repository": REPO_URL})
+              "version": fs_version})
     return ExitCode.OK
