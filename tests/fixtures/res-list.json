@@ -1,0 +1,37 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/app/res-list"
+  },
+  "status": 200,
+  "content_type": "application/json; charset=utf-8",
+  "body": {
+    "result": true,
+    "type": "response",
+    "info": [
+      {
+        "resid": "148604",
+        "uid": "47044577",
+        "cid": 2,
+        "key": "5-227",
+        "pin": "1234",
+        "restype": "adhoc",
+        "start": 1787003045,
+        "finish": 1802555045,
+        "created": 1787003045,
+        "released": 0,
+        "active": 1,
+        "lastopened": 1787282958,
+        "lastopenuid": "86356842",
+        "releasecode": 0,
+        "confirmed": 1,
+        "conftime": 1787003045,
+        "confmethod": 1,
+        "confuid": "47044577",
+        "planid": 3,
+        "zoneid": 0
+      }
+    ]
+  },
+  "note": "Captured verbatim by experiments/07_capture_shapes.py. Real data, not scrubbed. Local to this machine."
+}

@@ -1,0 +1,62 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/app/slave-lockerstatus",
+    "params": {
+      "cid": 2
+    }
+  },
+  "status": 200,
+  "content_type": "application/json; charset=utf-8",
+  "body": {
+    "result": true,
+    "type": "response",
+    "info": {
+      "lockercount": 92,
+      "online": 92,
+      "available": 1,
+      "reserved": 91,
+      "types": [
+        {
+          "type": "a",
+          "typename": "Top Row",
+          "lockercount": 42,
+          "available": 0,
+          "reserved": 42,
+          "usbcharger": 0,
+          "usbcharging": 0,
+          "usbcurrent": 0
+        },
+        {
+          "type": "b",
+          "typename": "Bottom Row",
+          "lockercount": 42,
+          "available": 1,
+          "reserved": 41,
+          "usbcharger": 0,
+          "usbcharging": 0,
+          "usbcurrent": 0
+        },
+        {
+          "type": "c",
+          "typename": "Middle Row",
+          "lockercount": 8,
+          "available": 0,
+          "reserved": 8,
+          "usbcharger": 0,
+          "usbcharging": 0,
+          "usbcurrent": 0
+        }
+      ],
+      "usbcharger": 0,
+      "usbcharging": 0,
+      "usbcurrent": 0,
+      "cid": 2,
+      "lockerRange": {
+        "first_locker": "",
+        "last_locker": ""
+      }
+    }
+  },
+  "note": "Captured verbatim by experiments/07_capture_shapes.py. Real data, not scrubbed. Local to this machine."
+}

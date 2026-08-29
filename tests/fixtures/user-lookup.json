@@ -1,0 +1,35 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/app/user",
+    "params": {
+      "bkid": "00853044",
+      "uid": "47044577"
+    }
+  },
+  "status": 200,
+  "content_type": "application/json; charset=utf-8",
+  "body": {
+    "result": true,
+    "type": "response",
+    "info": {
+      "uid": "47044577",
+      "pin": "1234",
+      "name": "Jamie Baker",
+      "lastlogin": 1787283173,
+      "usertype": "user",
+      "expiry": 0,
+      "reslimit": 0,
+      "uidtoken": "00000000000000000000000000000000",
+      "desc": "8742",
+      "email": "jamie.baker@example.com",
+      "ugroupid": 10,
+      "privacy": 0,
+      "sso": "https://example-corp.okta.com#00uexampleuseridxxxx",
+      "created": 1768174368,
+      "updated": 1768253255,
+      "initials": "MG"
+    }
+  },
+  "note": "Captured verbatim by experiments/07_capture_shapes.py. Real data, not scrubbed. Local to this machine."
+}

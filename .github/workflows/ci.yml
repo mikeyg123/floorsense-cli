@@ -1,0 +1,29 @@
+name: CI
+
+# Runs on every PR, regardless of target branch -- lint + full test suite,
+# no network (auth/session tests use a loopback HTTP server; see
+# CLAUDE.md). Kept separate from release.yml, which is manual-dispatch
+# only and must never be triggered by a PR.
+on:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dev dependencies
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install -q -e '.[dev]'
+
+      - name: Ruff
+        run: .venv/bin/ruff check .
+
+      - name: Pytest
+        run: .venv/bin/pytest -q

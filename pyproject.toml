@@ -1,0 +1,40 @@
+[project]
+name = "floorsense-cli"
+version = "0.1.0"
+description = "fs -- desk and locker booking at the command line, via Floorsense"
+requires-python = ">=3.11"          # tomllib is stdlib from 3.11
+license = "LGPL-2.1-only"
+license-files = ["LICENSE"]
+dependencies = ["requests", "keyring", "tomli-w"]
+
+[project.optional-dependencies]
+dev = ["pytest", "requests-mock", "ruff", "shiv", "packaging"]
+
+[project.urls]
+Repository = "https://github.com/mikeyg123/floorsense-cli"
+
+[project.scripts]
+fs = "fs_cli.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fs_cli"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+# Start narrow: undefined names, unused imports/vars, bare-except style
+# issues -- the things `plan.py`'s `# noqa: BLE001` is meant to be an
+# exception *from*, not decoration with no linter behind it. Broaden once
+# the codebase is clean under this set rather than trying to land the full
+# default rule set in one pass.
+select = ["F", "E", "B", "BLE"]

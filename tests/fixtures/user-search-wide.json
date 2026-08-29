@@ -1,0 +1,86 @@
+{
+  "request": {
+    "method": "POST",
+    "path": "/app/user-search",
+    "body": {
+      "start": 1787227200,
+      "finish": 1788436800,
+      "name": "baker",
+      "desc": "baker"
+    }
+  },
+  "status": 200,
+  "content_type": "application/json; charset=utf-8",
+  "body": {
+    "result": true,
+    "type": "response",
+    "info": [
+      {
+        "uid": "47044577",
+        "name": "Jamie Baker",
+        "initials": "MG",
+        "desc": "8742",
+        "future": [
+          {
+            "uid": "47044577",
+            "name": "Jamie Baker",
+            "initials": "MG",
+            "desc": "8742",
+            "cid": 2,
+            "key": "L5.D.236A",
+            "bktype": "advance",
+            "groupid": 11,
+            "groupname": "Team Alpha",
+            "planid": 3,
+            "floorname": "Level 5",
+            "zoneid": 0,
+            "privacy": false,
+            "confirmed": false,
+            "start": 1787515200,
+            "finish": 1787544000,
+            "active": false
+          },
+          {
+            "uid": "47044577",
+            "name": "Jamie Baker",
+            "initials": "MG",
+            "desc": "8742",
+            "cid": 2,
+            "key": "L5.D.236A",
+            "bktype": "advance",
+            "groupid": 11,
+            "groupname": "Team Alpha",
+            "planid": 3,
+            "floorname": "Level 5",
+            "zoneid": 0,
+            "privacy": false,
+            "confirmed": false,
+            "start": 1787688000,
+            "finish": 1787716800,
+            "active": false
+          },
+          {
+            "uid": "47044577",
+            "name": "Jamie Baker",
+            "initials": "MG",
+            "desc": "8742",
+            "cid": 2,
+            "key": "L5.D.216A",
+            "bktype": "advance",
+            "groupid": 11,
+            "groupname": "Team Alpha",
+            "planid": 3,
+            "floorname": "Level 5",
+            "zoneid": 0,
+            "privacy": false,
+            "confirmed": false,
+            "start": 1787774400,
+            "finish": 1787803200,
+            "active": false
+          }
+        ]
+      }
+    ]
+  },
+  "note": "Captured verbatim by experiments/07_capture_shapes.py. Real data, not scrubbed. Local to this machine."
+}

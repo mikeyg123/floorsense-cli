@@ -1,0 +1,68 @@
+name: Release build
+
+# Manual only -- no `push`/`pull_request` trigger. A merge to main must
+# never cut a build or bump the version; that only happens when someone
+# runs this workflow by hand (Actions tab -> Run workflow, or
+# `gh workflow run release.yml -f version=X.Y.Z`).
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g. 0.2.0), written to pyproject.toml"
+        required: true
+      draft:
+        description: "Create the GitHub Release as a draft"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set version
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" pyproject.toml
+          grep '^version' pyproject.toml
+
+      - name: Install dev dependencies and test
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install -q -e '.[dev]'
+          .venv/bin/pytest -q
+
+      - name: Build release artifact
+        run: scripts/build-release.sh
+
+      - name: Smoke-test the built artifact
+        run: scripts/smoke-test.sh
+
+      - name: Commit version bump and tag
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -am "release: v$VERSION"
+          git tag "v$VERSION"
+          git push origin HEAD:main
+          git push origin "v$VERSION"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: "v${{ inputs.version }}"
+          name: "v${{ inputs.version }}"
+          draft: ${{ inputs.draft }}
+          files: dist/fs
+          generate_release_notes: true

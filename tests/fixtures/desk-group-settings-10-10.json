@@ -1,0 +1,24 @@
+{
+  "request": {
+    "method": "GET",
+    "path": "/app/get_desk_group_booking_settings",
+    "params": {
+      "groupid": 10,
+      "ugroupid": 10
+    }
+  },
+  "status": 200,
+  "content_type": "application/json; charset=utf-8",
+  "body": {
+    "result": true,
+    "info": {
+      "book_day_start": 480,
+      "book_duration_type": 2,
+      "booking_confirm_mins": 90,
+      "book_repeat_user": false,
+      "book_repeat_max_days": 0,
+      "book_advance_mins": 14400
+    }
+  },
+  "note": "Captured verbatim by experiments/07_capture_shapes.py. Real data, not scrubbed. Local to this machine."
+}
