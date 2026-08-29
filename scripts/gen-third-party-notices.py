@@ -26,11 +26,22 @@ NOTICE_FILE = pathlib.Path("NOTICE")
 
 # Only the runtime packages shiv actually bundles (see build-release.sh's
 # output) -- not pytest/ruff/shiv/etc, which never ship in dist/fs.
+#
+# The last five are `keyring`'s Linux-only Secret Service backend chain
+# (`sys_platform == "linux"` markers: keyring -> SecretStorage + jeepney,
+# SecretStorage -> cryptography + jeepney, cryptography -> cffi,
+# cffi -> pycparser). A build run on a Linux machine resolves and bundles
+# them; one run on macOS/Windows doesn't -- see `test_licences.py`'s
+# `_runtime_closure` docstring. Listed unconditionally here rather than
+# only when generating on Linux, so THIRD-PARTY-NOTICES.txt covers every
+# platform `scripts/build-release.sh`/`release.yml` might run on, not just
+# whichever one last generated it.
 RUNTIME_PACKAGES = [
     "requests", "urllib3", "idna", "certifi", "charset_normalizer",
     "keyring", "jaraco.classes", "jaraco.context", "jaraco.functools",
     "importlib_metadata", "zipp", "more_itertools", "backports.tarfile",
     "tomli_w",
+    "secretstorage", "jeepney", "cryptography", "cffi", "pycparser",
 ]
 
 LICENSE_NAMES = {
@@ -40,6 +51,24 @@ LICENSE_NAMES = {
     "jaraco.functools": "MIT", "importlib_metadata": "Apache-2.0",
     "zipp": "MIT", "more_itertools": "MIT", "backports.tarfile": "MIT",
     "tomli_w": "MIT",
+    "secretstorage": "BSD-3-Clause", "jeepney": "MIT",
+    # cryptography is dual Apache-2.0/BSD-3-Clause; bucketed under the
+    # first (own LICENSE.APACHE/LICENSE.BSD reproduced in full below via
+    # EXTRA_LICENSE_FILES, not just this template pick).
+    "cryptography": "Apache-2.0",
+    # cffi's own LICENSE is "MIT No Attribution" (SPDX MIT-0), not plain
+    # MIT -- distinct enough (no attribution clause) to warrant its own
+    # template rather than folding it into MIT's.
+    "cffi": "MIT-0",
+    "pycparser": "BSD-3-Clause",
+}
+
+#: Packages whose canonical `LICENSE` file is a pointer to OTHER files in
+#: the same dist-info (cryptography's says "see LICENSE.APACHE or
+#: LICENSE.BSD", not the text itself) -- reproduce all of them, in order,
+#: instead of just the pointer `find_license_text` would otherwise pick up.
+EXTRA_LICENSE_FILES = {
+    "cryptography": ["LICENSE.APACHE", "LICENSE.BSD"],
 }
 
 
@@ -62,7 +91,18 @@ def read_metadata(dist_info):
             home.group(1).strip() if home else "")
 
 
-def find_license_text(dist_info):
+def find_license_text(pkg, dist_info):
+    extra = EXTRA_LICENSE_FILES.get(pkg)
+    if extra:
+        texts = []
+        for name in extra:
+            for base in (dist_info, dist_info / "licenses"):
+                f = base / name
+                if f.is_file():
+                    texts.append(f.read_text(errors="replace"))
+                    break
+        if texts:
+            return ("\n\n" + "-" * 72 + "\n\n").join(texts)
     for name in ("LICENSE", "LICENSE.txt", "LICENSE.rst", "LICENSE.md"):
         for base in (dist_info, dist_info / "licenses"):
             f = base / name
@@ -88,7 +128,7 @@ def main():
         version, home = read_metadata(di)
         license_name = LICENSE_NAMES[pkg]
         license_names_seen.add(license_name)
-        text = find_license_text(di)
+        text = find_license_text(pkg, di)
         notice = find_notice_text(di)
         entries.append((pkg, version, home, license_name, text, notice))
 

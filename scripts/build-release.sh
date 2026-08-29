@@ -32,6 +32,7 @@
 # Verify both after any dependency bump:
 #   unzip -l dist/fs | grep -i backports      # must be non-empty
 #   unzip -l dist/fs | grep -E '\.(so|pyd|dylib)$'   # must be empty
+#   unzip -l dist/fs | grep -i cryptography   # must be empty
 #
 # Uncompressed by design (not `shiv`'s default): a compressed zipapp has to
 # unzip itself into a cache dir on first run, adding a one-time ~100-200ms
@@ -70,5 +71,23 @@ mkdir -p dist
     --uncompressed \
     --no-binary charset_normalizer \
     "$repo_root"
+
+# keyring's Linux-only Secret Service backend chain (secretstorage,
+# jeepney, cryptography, cffi, pycparser) is excluded from the bundle --
+# adds ~2.7M zipped, mostly cryptography's compiled Rust extension.
+# auth.py already falls back to a password prompt when no keychain
+# backend is available, so this is a no-op behaviourally on Linux, just
+# smaller. No-op on this step too when building on macOS/Windows, where
+# these were never bundled.
+if unzip -l dist/fs | grep -q 'site-packages/cryptography/'; then
+    echo "stripping linux-only keyring backend deps from dist/fs"
+    zip -q -d dist/fs \
+        'site-packages/cryptography*' \
+        'site-packages/cffi*' \
+        'site-packages/_cffi_backend*' \
+        'site-packages/secretstorage*' \
+        'site-packages/jeepney*' \
+        'site-packages/pycparser*'
+fi
 
 echo "built dist/fs"

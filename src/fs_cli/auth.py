@@ -111,10 +111,29 @@ def _account_key(username, origin=FLOORSENSE_ORIGIN):
     return f"{host}:{username}"
 
 
+def _read_password(account_key):
+    """`keyring.get_password`, treating "no backend available" the same as
+    "nothing stored" rather than crashing.
+
+    A machine with no OS keychain provider reachable (headless Linux with no
+    Secret Service/D-Bus session, e.g. a CI runner) makes every backend
+    non-viable, and `keyring` raises `NoKeyringError` from `get_password`
+    instead of returning `None` the way "account not found" does. Read
+    paths -- `fs status` in particular, which must never crash -- can't tell
+    those two states apart anyway, so both mean "not stored" here. Writes
+    (`store_password`) deliberately do NOT get this treatment: an explicit
+    `--save-password` with nowhere to put it is a real failure the user
+    should see, not one to swallow.
+    """
+    try:
+        return keyring.get_password(KEYCHAIN_SERVICE, account_key)
+    except keyring.errors.NoKeyringError:
+        return None
+
+
 def has_stored_password(username, aliases=(), origin=FLOORSENSE_ORIGIN):
     for account in (username, *aliases):
-        if account and keyring.get_password(KEYCHAIN_SERVICE,
-                                            _account_key(account, origin)):
+        if account and _read_password(_account_key(account, origin)):
             return True
     return False
 
@@ -137,8 +156,7 @@ def get_password(username, aliases=(), prompt=getpass.getpass,
     for account in (username, *aliases):
         if not account:
             continue
-        existing = keyring.get_password(KEYCHAIN_SERVICE,
-                                        _account_key(account, origin))
+        existing = _read_password(_account_key(account, origin))
         if existing:
             return existing
     return prompt(f"Okta password for {username}: ")
@@ -156,7 +174,13 @@ def forget_password(username, aliases=(), origin=FLOORSENSE_ORIGIN):
         try:
             keyring.delete_password(KEYCHAIN_SERVICE,
                                     _account_key(account, origin))
-        except keyring.errors.PasswordDeleteError:
+        except (keyring.errors.PasswordDeleteError,
+                keyring.errors.NoKeyringError):
+            # PasswordDeleteError: nothing was stored under this account --
+            # already the state we wanted. NoKeyringError: no backend to
+            # delete from means nothing is stored anywhere reachable either
+            # -- same as `_read_password`'s reasoning, this is a forget, not
+            # a save, so there's nothing for the user to act on.
             pass
 
 
