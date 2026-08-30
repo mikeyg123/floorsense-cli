@@ -2,11 +2,15 @@
 
 [![CI](https://github.com/mikeyg123/floorsense-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/mikeyg123/floorsense-cli/actions/workflows/ci.yml)
 [![Licence: LGPL-2.1](https://img.shields.io/badge/licence-LGPL--2.1-blue.svg)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/mikeyg123/floorsense-cli?label=latest)](https://github.com/mikeyg123/floorsense-cli/releases/latest)
 
 Because all the best intelligences love a CLI - even those that sit at desks.
 
 `fs` — desk booking at the command line, via
 [Floorsense](https://my.floorsense.nz), without opening a browser.
+
+**[⬇ Download the latest `fs` executable](https://github.com/mikeyg123/floorsense-cli/releases/latest/download/fs)**
+(always the newest release; see [Getting started](#getting-started) below).
 
 **Requirements:** Python 3.11+ on your `PATH`. Runs on macOS, Linux, and
 Windows via a bash-like shell (Git Bash/WSL/MSYS2).
@@ -28,9 +32,9 @@ Windows via a bash-like shell (Git Bash/WSL/MSYS2).
 
 ## Getting started
 
-1. Grab the `fs` executable, drop it somewhere on your `PATH` (e.g. `~/bin`
-   or `/usr/local/bin`), and make it executable. Run directly from a shell —
-   no install, no admin rights required. On Windows, run it from a
+1. [Download `fs`](https://github.com/mikeyg123/floorsense-cli/releases/latest/download/fs),
+   drop it somewhere on your `PATH` (e.g. `~/bin` or `/usr/local/bin`), and make it executable. 
+   Run directly from a shell — no install, no admin rights required. On Windows, run it from a
    bash-like shell if you have one, or create a launcher that runs it as a
    `python3` script in a terminal window.
 2. Make sure `python3` (3.11+) is on your `PATH` — `fs` is a self-contained
