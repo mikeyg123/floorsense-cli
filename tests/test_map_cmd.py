@@ -765,7 +765,7 @@ def test_fs_map_with_no_args_defaults_to_level5_no_bookings(tmp_path):
     catalog, api = _catalog_and_api(tmp_path)
     code, out, _err = run(catalog, api, Args(), today=dt.date(2026, 9, 1))
     assert code == ExitCode.OK
-    assert "Zone A" in out            # Level 5 zone label present
+    assert "Tech Point" in out            # Level 5 zone label present
     assert "▢" in out
 
 
@@ -784,7 +784,7 @@ def test_fs_map_date_only_resolves_the_floor_from_bookings(tmp_path):
     code, out, _err = run(catalog, api, Args(args=["mon"]),
                           today=dt.date(2026, 8, 21))
     assert code == ExitCode.OK
-    assert "Zone A" in out            # Level 5 zone label present
+    assert "Tech Point" in out            # Level 5 zone label present
 
 
 def test_fs_map_floor_and_date_are_order_independent(tmp_path):
@@ -992,7 +992,7 @@ def test_fs_map_falls_back_to_static_when_terminal_columns_is_none(
     catalog, api = _catalog_and_api(tmp_path)
     code, out, _err = run(catalog, api, Args(), today=dt.date(2026, 9, 1))
     assert code == ExitCode.OK
-    assert "Zone A" in out   # still rendered -- static path, not an error
+    assert "Tech Point" in out   # still rendered -- static path, not an error
 
 
 def test_fs_map_no_nav_forces_the_static_path_even_over_a_capable_stdin(
@@ -1012,7 +1012,7 @@ def test_fs_map_no_nav_forces_the_static_path_even_over_a_capable_stdin(
                    stdin=_WouldBeCapableIfChecked())
     out.finish()
     assert code == ExitCode.OK
-    assert "Zone A" in stdout.getvalue()
+    assert "Tech Point" in stdout.getvalue()
 
 
 class ScriptedKeys:

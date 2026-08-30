@@ -73,7 +73,7 @@ CROP_BY_FLOOR = {
 # (x0_frac, y0_frac, x1_frac, y1_frac) per segment.
 PARTITIONS_BY_FLOOR = {
     PLANID_LEVEL5: [
-        (0.28, 0.05, 0.28, 0.21),     # Zone A / Zone B boundary
+        (0.28, 0.05, 0.28, 0.21),     # V / Tech Point boundary
         (0.2522, 0.4595, 0.3272, 0.4595),
         (0.2522, 0.6433, 0.3272, 0.6433),
     ],
@@ -84,7 +84,7 @@ PARTITIONS_BY_FLOOR = {
 # -- for when the label runs into the wall or another block rather than
 # the block's actual position being wrong. Doesn't move any desk.
 ZONE_LABEL_NUDGE_BY_FLOOR = {
-    PLANID_LEVEL5: {"Zone C": -5},
+    PLANID_LEVEL5: {"Customer Excellence": -5},
     PLANID_LEVEL6: {},
 }
 
@@ -119,9 +119,9 @@ BLOCK_ADJUSTMENTS_BY_FLOOR = {
 
 ZONE_NAMES_BY_FLOOR = {
     PLANID_LEVEL5: [
-        ("Zone A", 0.00, 0.05, 0.28, 0.22),
-        ("Zone B", 0.28, 0.05, 0.40, 0.22),
-        ("Zone C", 0.76, 0.03, 1.00, 0.26),
+        ("V", 0.00, 0.05, 0.28, 0.22),
+        ("Tech Point", 0.28, 0.05, 0.40, 0.22),
+        ("Customer Excellence", 0.76, 0.03, 1.00, 0.26),
         ("Zone D", 0.22, 0.28, 0.40, 0.33),
     ],
     PLANID_LEVEL6: [

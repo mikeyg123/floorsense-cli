@@ -165,7 +165,7 @@ floor, if the building layout ever changes) will hit the same ones:
 | Outer wall | Hand-traced from the fetched image, as a polygon of `(x_frac, y_frac)` points | Furniture bounding box is a safe *lower bound* to check a guess against — real desks never sit outside the true wall |
 | Internal partitions | Hand-traced short line segments, drawn with a gap at both ends (`gap_ends=1`) | A sealed line reads as "no way through"; real partitions have a walkway around them |
 | Room boxes (VOID, LIFT/STAIRS, MEETING ROOMS) | Hand-traced rectangles | Plain outline only — "no bookable desks in here" is the whole point, no interior detail needed |
-| Zone name labels (Zone A, Zone B, Zone C, Zone D, Quiet Zone) | Hand-traced bounding boxes, matched against a desk's centroid | Verified against real desk counts the user supplied (Zone A 32, Zone C 25, Zone B 12) rather than trusted on sight |
+| Zone name labels (V, Tech Point, Customer Excellence, Zone D, Quiet Zone) | Hand-traced bounding boxes, matched against a desk's centroid | Verified against real desk counts the user supplied (V 32, Customer Excellence 25, Tech Point 12 — named Zone A/C/B at the time) rather than trusted on sight |
 | Lockers | ~~`deskpolys.lockPolys[]`~~ | **Removed** — didn't read well as ASCII, per direct feedback |
 
 Every hand-traced table lives in `src/fs_cli/floorplans/example_workplace.py`
@@ -189,7 +189,7 @@ same reason:
 
 ## Level 5 / Level 6 specifics worth knowing before touching either
 
-- Level 5's building genuinely **narrows below Zone A** — nothing sits left
+- Level 5's building genuinely **narrows below "V" (formerly Zone A)** — nothing sits left
   of x≈0.235 (image fraction) below that row. Confirmed against real
   desk positions, not assumed from the image alone.
 - Level 6's building **folds in at the bottom-left** for an open outdoor
@@ -398,7 +398,7 @@ plumbing:
   other yellow cell. The cursor cell gains the same `out.bold`, layered
   on top of its existing reverse+blink, for the same "still doesn't stand
   out enough" reason blink itself was added for in round 3.
-- **Level 5 map data corrections:** the Zone A zone's own internal divider
+- **Level 5 map data corrections:** the "V" zone's (then named Zone A) own internal divider
   partition (leftmost line in that zone) didn't correspond to a real
   partition and is removed. The horizontal 6-desk block about halfway
   down the right wall (`BLOCK_ADJUSTMENTS_BY_FLOOR`'s block 16) sat one
