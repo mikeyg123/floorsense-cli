@@ -57,20 +57,28 @@ Windows via a bash-like shell (Git Bash/WSL/MSYS2).
 ```bash
 fs list                        # show your upcoming bookings
 fs office-days tue wed fri     # set your office-days
-fs desks set preferred 2.166 2.80 2.217  # set your preferred desks
-fs book                        # book/upgrade to your best desks
-fs map                         # find and book desks on a terminal map
+fs desks set preferred 2.166 2.80 2.217
+                                # set your preferred desks
+fs book                        # book/upgrade to your best available
+                                # desks on your office days
+fs map                         # see where you are and book desks on
+                                # an interactive scrollable map inside
+                                # your terminal
 fs team set officers picard riker data geordi worf troy bev
+                                # set your team
 fs list officers               # find your team
 fs help                        # see what else you can do
 
-fs list tasha tomorrow         # a colleague's bookings, by name/date
+fs list tasha tomorrow         # see a colleague's bookings by name(s)
+                                # and date(s)
 fs book 5.123 tue              # book desk 5.123 for Tuesday
-fs book --yes                  # auto book/upgrade your office days
+fs book --yes                  # auto book/upgrade your preferred
+                                # desks on your regular office days
 fs checkin                     # check in to today's booking
 fs release                     # release today's desk booking
 fs release tue-next            # un-book Tuesday of next week
-fs at 2.123 3rd                # who's at a desk/group on a date
+fs at 2.123 3rd                # see who's sitting at a desk/group on
+                                # a date
 fs office-days                 # see/set your own regular office days
 fs help book                   # full help for a single command
 ```
