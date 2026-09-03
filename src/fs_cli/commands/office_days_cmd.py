@@ -1,20 +1,14 @@
 """`fs office-days [<day>...]` -- a straight `config.toml` write, no
-`plan.py` pipeline (nothing to confirm) -- closer in shape to `fs status`
-than to `fs book`.
+`plan.py` pipeline.
 
-No args is read-only: prints what's configured, same as the office-days
-line in `cmd_status`. Given args, this REPLACES the whole list rather than
-offering `add`/`remove`/`set`/`delete` -- that verb grammar (`args.py`'s
-`LIST_VERBS`) is reserved for `fs team`/`fs desks`, which manage ordered,
-named lists. Office days are a single unordered set with no name to pick
-between, so a plain replace is the whole grammar this command needs.
+No args is read-only. Given args, this REPLACES the whole list rather
+than offering `add`/`remove`/`set`/`delete` -- office days are a single
+unordered set with no name to pick between.
 
-Tokens are validated against `dates.WEEKDAYS` (so `mon`, `monday`, `tues`
-all work) before anything is written -- an unknown token is a `UsageError`
-and the config is left untouched, never partially updated. Valid tokens are
-canonicalised to their full lowercase name and sorted by weekday index, so
-`config.toml` reads the same regardless of what order or spelling the user
-typed.
+Tokens are validated against `dates.WEEKDAYS` before anything is written
+-- an unknown token is a `UsageError`, config left untouched. Valid
+tokens are canonicalised to full lowercase name and sorted by weekday
+index, so `config.toml` reads the same regardless of typed order/spelling.
 """
 
 from .. import config as config_mod

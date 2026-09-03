@@ -1,41 +1,30 @@
 """`fs desks [<name>] [add|remove|set|delete] [<desk>...]` -- built on
-`plan.py`'s confirm/execute pipeline (its own docstring names `team` and
-`desks` as intended consumers) and `args.peel` for the name/verb grammar.
+`plan.py`'s confirm/execute pipeline and `args.peel` for the name/verb
+grammar.
 
 No name lists the configured group names. A name with no verb lists that
-group's members (read-only) -- `NotFound` if it isn't configured, since an
-unconfigured name here is a typo, not "empty". A name WITH items but no
-verb is a `UsageError`: PLAN.md's list grammar is explicit that a bare name
-plus a list is never an implicit replace.
+group's members (read-only) -- `NotFound` if unconfigured, since that's a
+typo, not "empty". A name WITH items but no verb is a `UsageError`: a
+bare name plus a list is never an implicit replace.
 
-The verb may come before the name instead of after it -- `fs desks add
-preferred 217a` means the same as `fs desks preferred add 217a` -- via
-`peel()`'s `known_names` disambiguation: unambiguous only when the first
-token is a verb literal that ISN'T also a real configured group name, so a
-group someone genuinely named "add" keeps its name-first meaning rather
-than being silently reinterpreted.
+The verb may come before the name instead of after -- `fs desks add
+preferred 217a` == `fs desks preferred add 217a` -- via `peel()`'s
+`known_names` disambiguation: unambiguous only when the first token is a
+verb literal that isn't also a real configured group name.
 
 `add`/`remove`/`set` diff the current membership against what was asked
-for and hand the result to `plan.py` as an ordinary confirm/execute plan --
-`CREATE` for a newly-added desk, `RELEASE` for a dropped one, `NOOP` when
-the request already matches reality (already a member / not a member /
-unchanged), so `fs desks quiet-corner set 217a 235a` shows exactly what will
-and won't change before anything is written, the same as `fs book`.
+for and hand the result to `plan.py` as a confirm/execute plan -- CREATE
+for a newly-added desk, RELEASE for a dropped one, NOOP when the request
+already matches reality.
 
 Each row's `run()` mutates `cfg.groups[name]` in place and saves
-`config.toml` immediately, rather than computing a final list and saving
-once after `execute()` returns -- that's what makes a partially-confirmed
-plan (some rows toggled off) save exactly what was actually applied,
-mirroring how `book`/`release`'s rows each make one HTTP call rather than
-the command computing a final booking set and writing it in one shot.
+`config.toml` immediately, rather than saving once after `execute()`
+returns -- so a partially-confirmed plan saves exactly what was applied.
 
 Desk tokens are resolved through `desks.match_desk` against the live
-catalog BEFORE any plan is built -- a typo'd desk must fail fast (`NotFound`,
-exit 8) rather than getting silently written to `config.toml`, and the
-canonical catalog key is what gets stored, never the raw token the user
-typed. `named_list_actions` (this module) is generic over "what a row's
-identity/label/add-or-remove callback are" precisely so `team_cmd.py` can
-reuse it rather than re-deriving the same diff.
+catalog BEFORE any plan is built -- a typo'd desk fails fast rather than
+being written to `config.toml`. `named_list_actions` is generic so
+`team_cmd.py` can reuse it rather than re-deriving the same diff.
 """
 
 from .. import config as config_mod
@@ -47,30 +36,21 @@ from ..plan import Action, ActionPlan, Kind, confirm, execute
 __all__ = ["cmd_desks", "named_list_actions", "named_list_deleter",
           "VERB_GERUND"]
 
-#: `add`/`remove`/`set` -> the intent-line verb ("Adding"/"Removing"/
-#: "Setting") -- a plain `.capitalize() + "ing"` mangles two of the three
-#: ("Removeing", "Seting"), so this is spelled out rather than derived.
-#: Shared with `team_cmd.py`, which reuses `named_list_actions` for the same
-#: add/remove/set grammar.
+#: `add`/`remove`/`set` -> the intent-line verb -- `.capitalize() + "ing"`
+#: mangles two of three ("Removeing", "Seting"), so spelled out. Shared
+#: with `team_cmd.py`.
 VERB_GERUND = {"add": "Adding", "remove": "Removing", "set": "Setting"}
 
 
 def named_list_actions(verb, current, items, make_add_run, make_remove_run):
     """The shared add/remove/set diff, generic over what's being listed.
-
-    `current` and `items` are both `(key, label)` pairs -- `key` is what
-    identity is compared on (a canonical desk key, a uid, a lowercased
-    name), `label` is what's shown. For `add`/`remove`, `items` is the
-    list the verb names; for `set`, `items` is the FULL desired list.
-    `make_add_run(key, label)`/`make_remove_run(key, label)` build the
-    `Action.run` callable for a row that turns out to need one -- NOOP rows
-    never call either, since there is nothing to run.
+    `current`/`items` are `(key, label)` pairs -- `key` is what identity
+    is compared on, `label` is what's shown. For `add`/`remove`, `items`
+    is the list the verb names; for `set`, it's the FULL desired list.
     """
     current_by_key = dict(current)
-    # Dedupe the requested items by key, first occurrence wins -- otherwise
-    # `fs desks <group> add 217a 217a` (or, via `team_cmd.py`'s reuse of
-    # this function, `fs team <team> add jane jane`) produces two identical
-    # rows in the confirm table instead of one.
+    # Dedupe by key, first occurrence wins -- otherwise `fs desks <group>
+    # add 217a 217a` produces two identical rows instead of one.
     seen = set()
     deduped = []
     for key, label in items:
@@ -157,9 +137,9 @@ def _list_group_members(out, groups, name, tags):
 
 
 def _saver(cfg, directory, out, name, key, add):
-    """`add=True` appends `key` to `cfg.groups[name]` (creating the group
-    if this is its first member); `add=False` drops it. Saves immediately
-    -- see the module docstring on why this isn't batched."""
+    """`add=True` appends `key` to `cfg.groups[name]` (creating the
+    group if it's the first member); `add=False` drops it. Saves
+    immediately -- see the module docstring on why."""
     def run():
         keys = list(cfg.groups.get(name, []))
         if add:
@@ -174,11 +154,8 @@ def _saver(cfg, directory, out, name, key, add):
 
 def named_list_deleter(cfg, directory, out, target_dict, name):
     """`run()` for a whole-group/whole-team `delete`: drop `name` from
-    `target_dict` (`cfg.groups` or `cfg.teams`) and save. Generic over
-    which dict for the same reason `named_list_actions` is generic over
-    add/remove/set -- `team_cmd.py`'s `following`-less teams reuse this
-    rather than carrying a byte-for-byte copy that only differs in which
-    `cfg` attribute it closes over."""
+    `target_dict` (`cfg.groups` or `cfg.teams`) and save. Generic so
+    `team_cmd.py` can reuse it too."""
     def run():
         target_dict.pop(name, None)
         config_mod.save(cfg, directory, on_repair=out.warn)
@@ -188,18 +165,14 @@ def named_list_deleter(cfg, directory, out, target_dict, name):
 def cmd_desks(ctx):
     out, cfg, catalog = ctx.out, ctx.config, ctx.catalog
     # `fs desks` resolves its desk tokens directly (via `match_desk` on
-    # `rest`), not through `args.bind()` -- so the `--desk`/`--date`/`--name`/
-    # `--group`/`--all` classifier escape hatches are never wired in here at
-    # all, and would otherwise be silently ignored rather than doing anything.
+    # `rest`), not through `args.bind()` -- the classifier escape hatches
+    # are never wired in here, and would otherwise be silently ignored.
     reject_forced(ctx.args, "fs desks")
     name, verb, rest = peel(ctx.args.args, known_names=cfg.groups.keys())
 
     if name is None:
-        # `cached_tag_map()`, not `tag_map()` -- a bare `fs desks` is a pure
-        # listing (the desks it shows are already stored in `config.toml`
-        # by key) and must keep `fs status`'s "never triggers a login"
-        # contract. A tag is shown when cheaply known from cache; a cold
-        # cache means no tags, not a forced live fetch.
+        # `cached_tag_map()`, not `tag_map()`: a bare `fs desks` must keep
+        # `fs status`'s "never triggers a login" contract.
         _list_group_names(out, cfg.groups, catalog.cached_tag_map())
         return ExitCode.OK
 
@@ -209,14 +182,12 @@ def cmd_desks(ctx):
                 f"{name!r} needs add, remove, set, or delete before the "
                 f"desk list",
                 hint=f"e.g. `fs desks {name} add {rest[0]}`.")
-        # Same reasoning as the bare-listing branch above.
         _list_group_members(out, cfg.groups, name, catalog.cached_tag_map())
         return ExitCode.OK
 
     if verb == "delete":
-        # No tags needed -- deleting a group never displays one, so this is
-        # the one verb that must NOT force a `tag_map()`/catalog fetch (and
-        # therefore never forces a login) the way the other branches do.
+        # No tags needed -- deleting a group never displays one, so this
+        # verb must NOT force a catalog fetch the way the others do.
         if rest:
             raise UsageError("`delete` does not take desk arguments")
         if name not in cfg.groups:

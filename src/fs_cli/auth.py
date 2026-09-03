@@ -1,25 +1,17 @@
 """Okta login and the Floorsense session exchange. No browser anywhere.
 
-This module is a transcription, not a design. The chain it walks is
-`okta-auth-manual.md` §6 Part A (password + push MFA + number-matching) into
-`floorsense-api-manual.md` §4.3 (the browser-free Floorsense exchange). Both
-were established by live experiment and both have already cost this project a
-wrong turn; nothing here re-derives them.
+Transcribes `okta-auth-manual.md` §6 Part A (password + push MFA +
+number-matching) into `floorsense-api-manual.md` §4.3 (the browser-free
+Floorsense exchange). Four traps to know before touching this file:
 
-The four traps encoded here, each of which has bitten before:
-
-  * `prompt=none` on `/oauth2/v1/authorize`. Without it Okta returns 200 and
-    the Sign-In Widget's HTML, which completes SSO in JavaScript -- and a
-    ~300MB Playwright dependency got built around that before someone tried
-    the one parameter that removes it (`okta-auth-manual.md` §3).
+  * `prompt=none` on `/oauth2/v1/authorize` -- without it Okta returns
+    the Sign-In Widget's HTML instead of completing SSO (§3).
   * The CSRF token is a HEADER on `/app/config` and a FORM FIELD on
     `POST /app/login`. Same token, one endpoint apart (§4.2).
-  * The poll URL is `_links.next` (whose *name* is "poll"), not
-    `_links.poll` -- which matches nothing and silently falls through to a
-    default that happens to work (`okta-auth-manual.md` §2).
+  * The poll URL is `_links.next` (named "poll"), not `_links.poll`,
+    which matches nothing (§2).
   * Success is asserted on the landing URL AND the cookies, never cookie
-    names alone: `/app/login` sets a pre-auth `id` cookie, so name-only
-    checks are a known false positive (§4.4).
+    names alone: `/app/login` sets a pre-auth `id` cookie (§4.4).
 """
 
 import getpass
@@ -46,10 +38,9 @@ FLOORSENSE_HOST = "my.floorsense.nz"
 POLL_INTERVAL_S = 2
 POLL_TIMEOUT_S = 90
 
-# Browser-ish headers on the APPLICATION's endpoints: content negotiation,
-# getting HTML where HTML is expected. The Okta calls below deliberately keep
-# the honest `python-requests` UA -- spoofing it there would be detection
-# evasion, not scripting (`okta-auth-manual.md` §7).
+# Browser-ish headers on the APPLICATION's endpoints only (content
+# negotiation). Okta calls below keep the honest `python-requests` UA --
+# spoofing it there would be detection evasion, not scripting (§7).
 BROWSER_HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                    "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -68,21 +59,19 @@ _JSON_HEADERS = {"Accept": "application/json",
 # --------------------------------------------------------------------------
 
 def okta_origin(org_host):
-    """Config stores a bare host; every call needs an origin. Vanity domains
-    (`login.company.com` CNAME'd to Okta) are used verbatim -- the API paths
-    are identical and the cookies are set on that domain."""
+    """Config stores a bare host; every call needs an origin. Vanity
+    domains (CNAME'd to Okta) are used verbatim -- the API paths and
+    cookies are the same."""
     if "://" in org_host:
         return org_host.rstrip("/")
     return f"https://{org_host}"
 
 
 def cookies_for(session, origin):
-    """The cookies belonging to one origin.
-
-    Matching is on hostname, not on a hardcoded domain substring, so the same
-    code works against a vanity Okta domain and against a test server. A
-    cookie with no domain set belongs to the host that issued it.
-    """
+    """The cookies belonging to one origin -- matched on hostname, not a
+    hardcoded domain substring, so this works against a vanity Okta
+    domain or a test server alike. A cookie with no domain set belongs
+    to the host that issued it."""
     host = urlparse(origin).hostname or ""
     out = {}
     for c in session.cookies:
@@ -93,16 +82,11 @@ def cookies_for(session, origin):
 
 
 def _account_key(username, origin=FLOORSENSE_ORIGIN):
-    """Scope the keychain account by Floorsense origin, so `--url` pointing
-    at a second deployment can't collide with the default one.
-
-    Keyed on `username` alone would mean two different Floorsense
-    deployments that happen to share an Okta local part (e.g. the same
-    person, or two people with the same local part, at the default org and
-    at a `--url`-overridden one) silently read and overwrite each other's
-    password. The default origin keeps the bare username as its key so
-    existing keychain entries stay valid; only a non-default origin gets the
-    host prefixed on.
+    """Scope the keychain account by Floorsense origin, so `--url`
+    pointing at a second deployment can't collide with the default one.
+    The default origin keeps the bare username as its key (existing
+    entries stay valid); only a non-default origin gets the host
+    prefixed on.
     """
     origin = origin or FLOORSENSE_ORIGIN
     if origin == FLOORSENSE_ORIGIN:
@@ -112,18 +96,13 @@ def _account_key(username, origin=FLOORSENSE_ORIGIN):
 
 
 def _read_password(account_key):
-    """`keyring.get_password`, treating "no backend available" the same as
-    "nothing stored" rather than crashing.
-
-    A machine with no OS keychain provider reachable (headless Linux with no
-    Secret Service/D-Bus session, e.g. a CI runner) makes every backend
-    non-viable, and `keyring` raises `NoKeyringError` from `get_password`
-    instead of returning `None` the way "account not found" does. Read
-    paths -- `fs status` in particular, which must never crash -- can't tell
-    those two states apart anyway, so both mean "not stored" here. Writes
-    (`store_password`) deliberately do NOT get this treatment: an explicit
-    `--save-password` with nowhere to put it is a real failure the user
-    should see, not one to swallow.
+    """`keyring.get_password`, treating "no backend available" the same
+    as "nothing stored" rather than crashing -- a headless machine with
+    no keychain provider raises `NoKeyringError` instead of returning
+    `None`, and read paths (`fs status` especially) can't tell those
+    apart anyway. Writes (`store_password`) deliberately do NOT get this
+    treatment: `--save-password` with nowhere to put it is a real
+    failure to show, not swallow.
     """
     try:
         return keyring.get_password(KEYCHAIN_SERVICE, account_key)
@@ -140,18 +119,11 @@ def has_stored_password(username, aliases=(), origin=FLOORSENSE_ORIGIN):
 
 def get_password(username, aliases=(), prompt=getpass.getpass,
                  origin=FLOORSENSE_ORIGIN):
-    """Keychain first, prompt only if it isn't there.
-
-    This is the DEFAULT (no `--save-password`) path only --
-    `cli.py`'s `make_password_provider` calls this exact function when
-    `--save-password` isn't given, and bypasses it entirely (always
-    prompting instead) when it is.
-
-    `aliases` exists because keychain entries are keyed by username: someone
-    who first stored the password under their email would otherwise silently
-    stop being found after switching to the Okta login (§2). `origin` scopes
-    the lookup the same way `store_password` scopes the write -- see
-    `_account_key`.
+    """Keychain first, prompt only if it isn't there -- the DEFAULT (no
+    `--save-password`) path only; that flag bypasses this entirely and
+    always prompts. `aliases` covers someone who first stored the
+    password under their email -- otherwise silently not found after
+    switching to the Okta login.
     """
     for account in (username, *aliases):
         if not account:
@@ -176,11 +148,9 @@ def forget_password(username, aliases=(), origin=FLOORSENSE_ORIGIN):
                                     _account_key(account, origin))
         except (keyring.errors.PasswordDeleteError,
                 keyring.errors.NoKeyringError):
-            # PasswordDeleteError: nothing was stored under this account --
-            # already the state we wanted. NoKeyringError: no backend to
-            # delete from means nothing is stored anywhere reachable either
-            # -- same as `_read_password`'s reasoning, this is a forget, not
-            # a save, so there's nothing for the user to act on.
+            # PasswordDeleteError: already the state we wanted.
+            # NoKeyringError: nothing reachable to delete from either --
+            # a forget, not a save, so nothing for the user to act on.
             pass
 
 
@@ -190,14 +160,9 @@ def forget_password(username, aliases=(), origin=FLOORSENSE_ORIGIN):
 
 def extract_challenge_number(body):
     """Number-matching lives at `_embedded.factor._embedded.challenge
-    .correctAnswer`.
-
-    Two traps, both hit before: the nested `_embedded` (an earlier guess used
-    `factor.embedded` and silently extracted nothing, leaving the user
-    staring at a device prompt with no number), and the fact that it is NOT
-    present on the first poll -- it appears once the device has registered
-    the challenge. So callers must check on every iteration.
-    """
+    .correctAnswer` -- note the nested `_embedded`, and that it's NOT
+    present on the first poll (appears once the device registers the
+    challenge), so callers must check on every iteration."""
     factor = (body or {}).get("_embedded", {}).get("factor", {})
     return factor.get("_embedded", {}).get("challenge", {}).get("correctAnswer")
 
@@ -206,19 +171,17 @@ def _authn_error(status, body):
     code = (body or {}).get("errorCode")
     summary = (body or {}).get("errorSummary", "")
     if code == "E0000038":
-        # Classic AuthN disabled for the org. Not a credential problem, so
-        # not AUTH_FAILED -- there is nothing the user can retype.
+        # Classic AuthN disabled for the org -- not AUTH_FAILED, nothing
+        # the user can retype.
         return CommError(
             "this Okta org has disabled the Classic AuthN API, which is the "
             "only path fs can use without a browser",
             hint="This needs an Okta admin, not a different password.")
     if status == 401 or code == "E0000004":
-        # E0000004 is generic on purpose: wrong password AND several other
-        # rejections share it (§1) -- Okta doesn't distinguish a bad
-        # password from a bad username, so neither do we. `InvalidCredentials`,
-        # not plain `AuthFailed`: `session.py` forgets a stored password on
-        # this specifically, and must be able to tell it apart from
-        # `LOCKED_OUT` below, where the password isn't the problem.
+        # E0000004 is generic on purpose (§1) -- Okta doesn't distinguish
+        # bad password from bad username, so neither do we.
+        # `InvalidCredentials`, not `AuthFailed`: `session.py` forgets a
+        # stored password on this specifically, distinct from LOCKED_OUT.
         return InvalidCredentials(
             "invalid Okta username or password",
             hint="Run again to be prompted for a new password, or "
@@ -228,11 +191,10 @@ def _authn_error(status, body):
 
 def login_with_push_mfa(org, username, password, on_message=print,
                         sleep=time.sleep, timeout_s=POLL_TIMEOUT_S):
-    """Password, then push MFA with polling. Returns a one-shot sessionToken.
-
-    The human wait happens here, inside the ~5 min `stateToken` window --
-    the only token with slack in it. The `sessionToken` does not exist until
-    after the tap, so a slow tap can never burn it (§4, token lifetimes).
+    """Password, then push MFA with polling. Returns a one-shot
+    sessionToken. The human wait happens inside the ~5 min `stateToken`
+    window -- the only token with slack; `sessionToken` doesn't exist
+    until after the tap, so a slow tap can never burn it (§4).
     """
     origin = okta_origin(org)
     authn_url = f"{origin}/api/v1/authn"
@@ -253,15 +215,13 @@ def login_with_push_mfa(org, username, password, on_message=print,
     if status == "LOCKED_OUT":
         raise AuthFailed("this Okta account is locked out")
     if status == "SUCCESS":
-        # No MFA required. Unexpected on this org, but perfectly valid.
-        return body["sessionToken"]
+        return body["sessionToken"]   # no MFA required, but perfectly valid
     if status != "MFA_REQUIRED":
         raise LoginRequired(f"Okta returned an unexpected status: {status}")
 
     state_token = body["stateToken"]
     factors = body.get("_embedded", {}).get("factors", [])
-    # Never hardcode factor ids -- they differ per user and change on
-    # re-enrollment. Select by type and follow `_links.verify.href` (§2).
+    # Never hardcode factor ids -- select by type, follow `_links.verify.href`.
     push = next((f for f in factors if f.get("factorType") == "push"), None)
     if push is None:
         raise LoginRequired(
@@ -273,9 +233,7 @@ def login_with_push_mfa(org, username, password, on_message=print,
     body = requests.post(verify_url, json={"stateToken": state_token},
                          headers=_JSON_HEADERS, timeout=15).json()
 
-    # `_links.next` -- whose *name* is "poll". There is no `_links.poll`
-    # key; code that looks one up matches nothing and silently uses whatever
-    # default it was handed (§2 step 2).
+    # `_links.next` -- whose *name* is "poll". No `_links.poll` key exists.
     poll_url = (body.get("_links", {}).get("next", {}).get("href")
                 or verify_url)
 
@@ -294,11 +252,9 @@ def login_with_push_mfa(org, username, password, on_message=print,
         status = body.get("status")
 
         if not shown:
-            # Check EVERY poll: the number is absent from the first response
-            # and appears once the device registers the challenge. It also
-            # may never appear at all -- number-matching tracks the Okta
-            # Verify device's state, not this client's -- so never block
-            # waiting for it.
+            # Check EVERY poll -- absent from the first response, appears
+            # once the device registers the challenge, may never appear
+            # at all. Never block waiting for it.
             number = extract_challenge_number(body)
             if number is not None:
                 on_message(f"Tap {number} on your device.")
@@ -328,15 +284,12 @@ def scrape_csrf(html):
 
 
 def _mint_authorize_url(app_username, origin):
-    """Steps 2-4 of the Floorsense login chain (`floorsense-api-manual.md`
-    §4.1/§4.3): CSRF token off `/app/login`'s HTML, the config lookup, then
-    POST `/app/login` to mint a fresh OIDC authorize URL -- returned as the
-    redirect `Location` header, unfollowed. `password` is sent empty and
-    Okta is never contacted here; Floorsense only needs to know who you
-    claim to be so it can set `login_hint`. Shared by `floorsense_login`
-    (which keeps the session and follows the URL into the real Okta
-    exchange) and `discover_okta_org` (which only wants the org host off
-    the redirect and discards the session).
+    """Steps 2-4 of the Floorsense login chain (§4.1/§4.3): CSRF token
+    off `/app/login`'s HTML, the config lookup, then POST `/app/login` to
+    mint a fresh OIDC authorize URL -- returned as the redirect
+    `Location` header, unfollowed. `password` is sent empty; Okta is
+    never contacted here. Shared by `floorsense_login` and
+    `discover_okta_org`.
     """
     s = requests.Session()
     s.headers.update(BROWSER_HEADERS)
@@ -352,11 +305,10 @@ def _mint_authorize_url(app_username, origin):
           headers={"x-csrf-token": csrf, "X-Requested-With": "XMLHttpRequest",
                    "Referer": f"{origin}/app/login"}, timeout=30)
 
-    # 4. Mint a FRESH authorize URL. Token as a FORM FIELD here -- sending it
-    #    as a header returns an HTML "CSRF Check Failed" page, not a 302.
-    #    `state` and `code_challenge` are per-attempt and stored server-side
-    #    against this session's pre-auth `id` cookie, so a captured or
-    #    replayed URL is dead on arrival.
+    # 4. Mint a FRESH authorize URL. Token as a FORM FIELD here -- as a
+    #    header it returns an HTML "CSRF Check Failed" page, not a 302.
+    #    `state`/`code_challenge` are per-attempt, so a replayed URL is
+    #    dead on arrival.
     resp = s.post(f"{origin}/app/login",
                   data={"method": "oidc", "captchatoken": "",
                         "csrftoken": csrf, "username": app_username,
@@ -369,19 +321,13 @@ def _mint_authorize_url(app_username, origin):
 
 def discover_okta_org(email, origin=FLOORSENSE_ORIGIN):
     """Learn which Okta org this Floorsense deployment delegates auth to,
-    from nothing but the login email -- no `okta_org` needs to be known or
-    typed up front, which most users would not recognise anyway (it isn't
-    derivable from the email domain: `example.com` mail, but
-    `example-corp.okta.com` for Okta -- confirmed live 2026-08-21).
+    from nothing but the login email -- not derivable from the email
+    domain (`example.com` mail can mean `example-corp.okta.com`).
 
-    A throwaway, unauthenticated replay of `_mint_authorize_url`: mint a
-    CSRF token, POST `/app/login` with the email and no password, and read
-    the org straight off the redirect's `Location` header rather than
-    following it anywhere -- no MFA, no session created, safe to call as
-    often as needed. The session it builds is discarded; the real login
-    (`floorsense_login`) mints its own fresh state/PKCE pair and cannot
-    reuse this one (`floorsense-api-manual.md` §4.3's "steps 2->5 must run
-    uninterrupted").
+    A throwaway, unauthenticated replay of `_mint_authorize_url`: reads
+    the org off the redirect's `Location` header without following it --
+    no MFA, no session created. The session it builds is discarded; the
+    real login mints its own fresh state/PKCE pair (§4.3).
     """
     _, authorize_url, status = _mint_authorize_url(email, origin)
     host = urlparse(authorize_url).netloc
@@ -395,17 +341,15 @@ def discover_okta_org(email, origin=FLOORSENSE_ORIGIN):
 def floorsense_login(app_username, session_token, org,
                      origin=FLOORSENSE_ORIGIN):
     """Turn a one-shot Okta sessionToken into an authenticated Floorsense
-    session. `floorsense-api-manual.md` §4.3, transcribed.
-
-    Steps 2->5 must run uninterrupted: no prompts, no sleeps. The
-    sessionToken is one-shot and the authorize URL is per-attempt.
+    session (§4.3). Steps 2->5 must run uninterrupted: no prompts, no
+    sleeps -- the sessionToken is one-shot, the authorize URL per-attempt.
     """
     okta = okta_origin(org)
     okta_host = urlparse(okta).netloc
 
     s, authorize_url, status = _mint_authorize_url(app_username, origin)
-    # Compared against the configured Okta host, not the substring
-    # "okta.com": vanity domains are real and would fail that check.
+    # Compared against the configured Okta host, not a substring check --
+    # vanity domains are real.
     if urlparse(authorize_url).netloc != okta_host:
         raise CommError(
             f"/app/login did not redirect to Okta ({status})",
@@ -413,7 +357,7 @@ def floorsense_login(app_username, session_token, org,
                  "rather than a csrftoken field (§4.6).")
 
     # 5. Redeem the one-shot sessionToken for a reusable Okta session.
-    #    safe='' matters: redirectUrl's own : and / must be escaped too.
+    #    safe='': redirectUrl's own : and / must be escaped too.
     s.get(f"{okta}/login/sessionCookieRedirect"
           f"?token={quote(session_token)}"
           f"&redirectUrl={quote(authorize_url, safe='')}",
@@ -429,8 +373,7 @@ def floorsense_login(app_username, session_token, org,
     if "error=login_required" in (resp.url or ""):
         raise LoginRequired("Okta reported no usable session (login_required)")
 
-    # 7. Landing URL AND cookies. Neither alone -- /app/login sets a pre-auth
-    #    `id` cookie, so cookie names are a known false positive (§4.4).
+    # 7. Landing URL AND cookies -- neither alone (§4.4).
     names = set(cookies_for(s, origin))
     if urlparse(resp.url).netloc != urlparse(origin).netloc:
         raise CommError(f"login did not complete -- ended at {resp.url}")

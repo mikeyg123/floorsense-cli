@@ -9,6 +9,7 @@ import argparse
 import datetime as dt
 import getpass
 import sys
+import textwrap
 import traceback
 from collections import namedtuple
 from importlib.metadata import version
@@ -22,7 +23,7 @@ from .commands.book_cmd import cmd_book
 from .commands.checkin_cmd import cmd_checkin
 from .commands.desks_cmd import cmd_desks
 from .commands.list_cmd import cmd_list
-from .commands.map_cmd import cmd_map
+from .commands.map_cmd import cmd_map, terminal_columns
 from .commands.office_days_cmd import cmd_office_days
 from .commands.release_cmd import cmd_release
 from .commands.reset_cmd import cmd_reset
@@ -36,27 +37,26 @@ __all__ = ["main", "build_parser"]
 
 
 def build_parser():
-    """Global flags only -- the command and its parameters are split out by
-    `split_argv`, NOT by a positional and `argparse.REMAINDER`.
-
-    Not `argparse.REMAINDER`: that swallows every flag typed after the
-    command too, so `fs book <desk> <date> --yes` would silently run
-    without `args.yes` ever being set.
-    """
+    """Global flags only -- command and parameters are split out by
+    `split_argv`, not `argparse.REMAINDER` (which would swallow every
+    flag typed after the command too)."""
     p = argparse.ArgumentParser(
-        prog="fs", add_help=True,
+        prog="fs", add_help=False,
         description="Desk booking, teams and desk groups, "
                      "at the command line. Run `fs help` for the command "
-                     "list, `fs help <command>` for one command's full "
-                     "grammar -- this --help only covers the flags below, "
-                     "which apply across every command.",
+                     "list and global options, `fs help <command>` for one "
+                     "command's full grammar.",
         usage="fs [command] [parameters] [options]")
 
-    # importlib.metadata resolves the version under an editable install,
-    # a shiv zipapp, or a normal install alike; pyproject.toml isn't always
-    # on disk to read.
+    # `--help`/`-h` handled like `--licences` -- `split_argv` turns it
+    # into `command="help"` so it goes through `print_command_help`'s
+    # coloured rendering instead of argparse exiting early.
+    p.add_argument("--help", "-h", action="store_true")
+    # importlib.metadata works under an editable install, a shiv zipapp,
+    # or a normal install alike; pyproject.toml isn't always on disk.
     p.add_argument("--version", action="version",
-                   version=f"%(prog)s {version('floorsense-cli')}")
+                   version=f"%(prog)s {version('floorsense-cli')}",
+                   help="show the installed version and exit")
     p.add_argument("--licences", "--licenses", action="store_true",
                    dest="licences",
                    help="print third-party licence notices and exit")
@@ -71,8 +71,7 @@ def build_parser():
     p.add_argument("--no-color", action="store_true",
                    help="plain text output, no ANSI colour")
     p.add_argument("--user", help="the Floorsense email (login_hint only)")
-    # metavar="LOGIN": the default OKTA_USER pushes past argparse's ~20-char
-    # wrap threshold and lands on its own line in --help.
+    # metavar="LOGIN": nicer than argparse's default OKTA_USER placeholder.
     p.add_argument("--okta-user", metavar="LOGIN",
                    help="the Okta login, if it differs")
     p.add_argument("--okta-org", help="the Okta org hostname, "
@@ -100,8 +99,6 @@ def build_parser():
 
     # Escape hatches for the classifier's precedence rule (args.py):
     # `fs find mon` can only mean Monday, so `--name mon` means Monica.
-    # `book`/`list`/`release`/`find`/`at` route these into the classifier;
-    # other commands reject them via `args.reject_forced`.
     p.add_argument("--date", action="append", default=[],
                    help="force a token to be read as a date, "
                         "not a name/desk/group")
@@ -119,17 +116,23 @@ def build_parser():
 
 def split_argv(parser, argv):
     """Global flags anywhere, command and parameters in order.
-
     `parse_known_args` leaves what it doesn't own in `rest`: the first
     leftover is the command, the rest are its parameters. An unrecognised
-    flag is a usage error rather than being passed through as a parameter.
-    No command (bare `fs`) defaults to `help`.
+    flag is a usage error. No command (bare `fs`) defaults to `help`.
+
+    `--help`/`-h` anywhere is a synonym for `fs help [<command>]`,
+    routed to a help lookup here so it goes through the same coloured
+    `print_command_help` as `fs help`.
     """
     options, rest = parser.parse_known_args(argv)
     unknown = [t for t in rest if t.startswith("-") and t != "-"]
     if unknown:
         raise UsageError(f"unknown option {unknown[0]!r}",
-                         hint="Run `fs --help` for the available options.")
+                         hint="Run `fs help` for the available options.")
+    if options.help:
+        options.command = "help"
+        options.args = [rest[0]] if rest else []
+        return options
     command = rest[0] if rest else "help"
     options.command = command
     options.args = rest[1:]
@@ -142,21 +145,16 @@ def split_argv(parser, argv):
 
 def first_run(out, args, directory, cfg, ask=input, discover_org=None,
               origin=None, persist=True):
-    """Collect the minimum needed to log in, then continue into the command
-    that was actually asked for.
+    """Collect the minimum needed to log in, then continue into the
+    command asked for. Mutates `cfg` rather than building a fresh one, so
+    preferences/groups/teams survive. Only the email is asked for;
+    `okta_user` defaults to its local part, `okta_org` is discovered via
+    `auth.discover_okta_org`. `--user`/`--okta-user`/`--okta-org` skip
+    the corresponding prompt so a non-interactive run works.
 
-    Mutates `cfg` (loaded from disk, possibly blank) rather than building a
-    fresh one, so preferences/groups/teams survive.
-
-    Only the email is asked for; `okta_user` defaults to its local part and
-    `okta_org` is discovered from it via `auth.discover_okta_org` (see
-    `floorsense-api-manual.md` §4.2). `--user`/`--okta-user`/`--okta-org`
-    skip the corresponding prompt/lookup, so a non-interactive run works.
-
-    `origin` is the Floorsense base URL to discover against (default
-    `auth.FLOORSENSE_ORIGIN`). `persist=False` (a `--url` change) sets the
-    identity on `cfg` but skips `config.save`; the caller saves once login
-    against the new URL succeeds.
+    `persist=False` (a `--url` change) sets identity on `cfg` but skips
+    `config.save`; the caller saves once login against the new URL
+    succeeds.
     """
     try:
         interactive = bool(sys.stdin.isatty())
@@ -203,27 +201,19 @@ def first_run(out, args, directory, cfg, ask=input, discover_org=None,
 # --------------------------------------------------------------------------
 
 def _resolve_identity(out, args, directory, cfg):
-    """Reconcile a `--url` override and first-run identity discovery before
-    a `Session` is built.
+    """Reconcile a `--url` override and first-run identity discovery
+    before a `Session` is built.
 
     First-run triggers on missing identity (`okta_user`), not a missing
-    file -- `fs reset --full` clears identity but leaves config.toml (and
-    its other sections) in place. Exempts `reset`: nothing to reset on a
-    never-configured machine either way.
+    file -- `fs reset --full` clears identity but leaves config.toml in
+    place. Exempts `reset`. A `--url` that differs from what's stored
+    means a different deployment, so it forces the same prompt as a
+    never-configured machine; the comparison is lower-cased (scheme/host
+    are case-insensitive). `persist=False`: written only once login
+    against the new URL succeeds.
 
-    A `--url` that differs from what's stored means a different Floorsense
-    deployment, so the stored identity can't be assumed valid there --
-    forces the same prompt as a never-configured machine. The comparison
-    (and the origin handed to `first_run`/`Session`/the keychain) is
-    lower-cased: scheme and host are case-insensitive, and `--url` only
-    ever carries an origin, never a path, so this can't clobber anything
-    path-shaped. `persist=False`: written only once login against the new
-    URL succeeds (`_persist_identity_on_success`), not eagerly.
-
-    Returns `(cfg, url_changed)`; the caller still needs `args.save_password`
-    to pick between `_store_on_login_success`/`_persist_identity_on_success`
-    and `origin` for `Session`/`make_password_provider`/etc, so this hands
-    back the ingredients rather than the finished callback.
+    Returns `(cfg, url_changed)` -- the caller still needs both to pick
+    the right success callback and origin.
     """
     requested_url = args.url.rstrip("/").lower() if args.url else None
     stored_url = (cfg.floorsense_url or auth.FLOORSENSE_ORIGIN).lower()
@@ -247,15 +237,11 @@ def _resolve_identity(out, args, directory, cfg):
 def make_password_provider(out, save=False, prompt=getpass.getpass,
                            origin=auth.FLOORSENSE_ORIGIN):
     """`--save-password` always prompts for a fresh password rather than
-    reusing a stored one -- it's usually typed to replace a password that
-    stopped working. Storing it happens in `session.py`'s
-    `on_login_success`, only once login is confirmed, not here. `Session`'s
-    `force_login` (wired from `args.save_password`) is what makes `ensure()`
-    reach this provider even when a session is already cached.
-
-    `origin` scopes the keychain lookup to this Floorsense deployment (see
-    `auth._account_key`) so a `--url` override can't read a different
-    deployment's stored password.
+    reusing a stored one -- it's usually typed to replace one that
+    stopped working. Storing happens in `session.py`'s
+    `on_login_success`, once login is confirmed, not here. `origin`
+    scopes the keychain lookup so a `--url` override can't read a
+    different deployment's stored password.
     """
     def provider(okta_user):
         if save:
@@ -265,14 +251,11 @@ def make_password_provider(out, save=False, prompt=getpass.getpass,
 
 
 def _forget_on_invalid_credentials(out, origin=auth.FLOORSENSE_ORIGIN):
-    """`Session.on_invalid_credentials`: Okta rejected the password itself,
-    so any stored copy is confirmed dead -- forget it so the next run
-    prompts fresh instead of failing the same way forever. Only wired up
-    when `--save-password` was NOT given (that flag never reads the
-    keychain, so a failure there is a typo in the new password, not proof
-    the stored one is bad). `origin` scopes the forget to this deployment,
-    same reason as `make_password_provider`.
-    """
+    """`Session.on_invalid_credentials`: Okta rejected the password, so a
+    stored copy is confirmed dead -- forget it so the next run prompts
+    fresh. Only wired when `--save-password` was NOT given (that flag
+    never reads the keychain, so a failure there is a typo, not proof
+    the stored one is bad)."""
     def on_invalid_credentials(okta_user):
         if auth.has_stored_password(okta_user, origin=origin):
             auth.forget_password(okta_user, origin=origin)
@@ -281,10 +264,8 @@ def _forget_on_invalid_credentials(out, origin=auth.FLOORSENSE_ORIGIN):
 
 def _store_on_login_success(out, save, origin=auth.FLOORSENSE_ORIGIN):
     """`Session.on_login_success`: called only once login is fully
-    confirmed (`session.py`'s `_probe`, not merely Okta accepting the
-    password), so a wrong guess never reaches the keychain and an
-    unconfirmed login never gets treated as one that worked. `origin` scopes
-    the write, same reason as `make_password_provider`."""
+    confirmed (not merely Okta accepting the password), so a wrong guess
+    never reaches the keychain."""
     def on_login_success(okta_user, password):
         if save:
             auth.store_password(okta_user, password, origin=origin)
@@ -294,12 +275,10 @@ def _store_on_login_success(out, save, origin=auth.FLOORSENSE_ORIGIN):
 
 def _persist_identity_on_success(out, cfg, directory, save,
                                  origin=auth.FLOORSENSE_ORIGIN):
-    """`Session.on_login_success` for a `--url` change: `first_run` set the
-    new identity on `cfg` in memory but skipped `config.save` (`persist=
-    False`) -- the URL, email, okta_user and okta_org are only written once
-    login against the NEW url is actually confirmed, same rule as the
-    password. Delegates the password half to `_store_on_login_success`
-    rather than duplicating it, so the two stay in lockstep."""
+    """`Session.on_login_success` for a `--url` change: `first_run` set
+    the new identity on `cfg` but skipped `config.save` -- written only
+    once login against the NEW url is confirmed. Delegates the password
+    half to `_store_on_login_success` so the two stay in lockstep."""
     store = _store_on_login_success(out, save, origin=origin)
 
     def on_login_success(okta_user, password):
@@ -321,8 +300,8 @@ HANDLERS = {"status": cmd_status, "list": cmd_list, "ls": cmd_list,
             "teams": cmd_team, "desks": cmd_desks, "reset": cmd_reset}
 COMMANDS = tuple(HANDLERS)
 
-#: `fs help [<command>]` grammar reference -- `fs --help` only covers the
-#: global flags. `(usage, summary, detail)` per command: `summary` is the
+#: `fs help [<command>]` grammar reference (`fs --help`/`fs -h` are
+#: synonyms). `(usage, summary, detail)` per command: `summary` is the
 #: one-line gloss for `fs help`, `detail` the full standalone grammar for
 #: `fs help <command>`.
 _CommandHelp = namedtuple("_CommandHelp", "usage summary detail")
@@ -593,21 +572,104 @@ COMMAND_HELP["find"] = _CommandHelp(
     "fs find [<name|team>...] [<date>...]  (alias: fs list)",
     COMMAND_HELP["list"].summary,
     "fs find is an alias for fs list:\n\n" + COMMAND_HELP["list"].detail)
+# Not in COMMANDS/HANDLERS -- `main` special-cases `help` before dispatch --
+# but `fs help help`/`fs --help --help` still need a COMMAND_HELP entry, or
+# they'd hit the same "unknown command" error as a real unknown command.
+COMMAND_HELP["help"] = _CommandHelp(
+    "fs help [<command>]  (alias: fs --help, fs -h)",
+    "This message, or one command's full grammar.",
+    """\
+fs help [<command>]
+
+    With no argument, lists every command with a one-line summary and
+    the global options. With a command name, prints that command's
+    full grammar.
+
+    fs --help / fs -h (with or without a command) are the same thing.""")
+
+#: `fs help`'s trailing "Examples:" section: `(command, comment)` pairs,
+#: word-wrapped at print time (`_wrapped`). `EXAMPLES = ()` drops the
+#: section entirely.
+EXAMPLES: tuple[tuple[str, str], ...] = (
+    ("fs list",
+     "show your upcoming bookings"),
+    ("fs office-days tue wed fri",
+     "set your usual office-days"),
+    ("fs desks set preferred 2.166 2.80 2.217",
+     "set your ordered list of preferred desks"),
+    ("fs book new",
+     "book/upgrade to your best available desks on your office days "
+     "when you don't already have a booking"),
+    ("fs map",
+     "see where you are and book desks on an interactive scrollable map "
+     "inside your terminal (if you have a capable terminal)"),
+    ("fs team set officers picard riker data geordi worf troy bev",
+     "set your team -- team 'favourites' are those starred on the "
+     "server, other teams are local"),
+    ("fs list officers",
+     "find your team"),
+    ("fs list tasha tomorrow",
+     "see a colleague's bookings by name(s) and date(s)"),
+    ("fs book 5.123 tue",
+     "book desk 5.123 for Tuesday"),
+    ("fs book --yes",
+     "auto book/upgrade your preferred desks on your regular office days"),
+    ("fs checkin",
+     "check in to today's booking"),
+    ("fs release",
+     "release today's desk booking"),
+    ("fs release tue-next",
+     "un-book Tuesday of next week"),
+    ("fs at 2.123 3rd",
+     "see who's sitting at a desk/group on a date"),
+    ("fs help book",
+     "full help for a single command")
+
+)
+
+#: Printed once, after `EXAMPLES`.
+EXAMPLES_NOTE = ("The order of many parameters is flexible when "
+                 "unambiguous, and there are many ways to specify a date "
+                 "-- see the built-in help for details.")
 
 
 def licence_notices():
-    """The packaged copy of NOTICE + THIRD-PARTY-NOTICES.txt, read via
-    `importlib.resources` so it works identically from an editable install,
-    a wheel, or a shiv zipapp. Regenerate with
-    `scripts/gen-third-party-notices.py` after any dependency change."""
+    """The packaged copy of NOTICE + THIRD-PARTY-NOTICES.txt. Regenerate
+    with `scripts/gen-third-party-notices.py` after any dependency
+    change."""
     return files("fs_cli").joinpath("_third_party_notices.txt").read_text()
 
 
+_HELP_INDENT = "      "
+
+
+def _wrapped(text, indent=_HELP_INDENT):
+    """A help string, word-wrapped under `indent` to the real terminal
+    width (80 when there's no tty). Several options' `help=` text is one
+    long sentence with no line breaks -- printing it raw just wraps
+    messily via the terminal, ignoring the indent."""
+    width = terminal_columns(sys.stdout) or 80
+    return textwrap.wrap(text, width=max(width - len(indent), 20)) or [""]
+
+
+def _format_option_invocation(action):
+    """`--okta-user LOGIN` / `--yes, -y` -- argparse's own invocation
+    format, reimplemented since `print_command_help` renders the options
+    list itself rather than handing it to argparse's `HelpFormatter`."""
+    invocation = ", ".join(action.option_strings)
+    if action.nargs == 0:                     # store_true / version / help
+        return invocation
+    metavar = action.metavar or action.dest.upper()
+    return f"{invocation} {metavar}"
+
+
 def print_command_help(out, requested):
-    """`fs help` (every command's usage + one-line gloss) or `fs help
-    <command>` (that command's full grammar). Unknown command name raises
-    the same `UsageError` shape as `fs <unknown>`.
-    """
+    """`fs help` (every command's usage + one-line gloss, plus the global
+    options) or `fs help <command>` (that command's full grammar).
+    Unknown command name raises the same `UsageError` as `fs <unknown>`.
+    `fs --help`/`fs -h` are synonyms; the options list is rendered
+    straight from `build_parser()`'s own arguments -- one source of
+    truth."""
     if not requested:
         out.print(out.bold("fs") + " -- desk booking at the command line.")
         out.print()
@@ -619,8 +681,27 @@ def print_command_help(out, requested):
             out.print(f"  {out.bold(help_.usage)}")
             out.print(f"      {out.muted(help_.summary)}")
         out.print()
+        out.print(out.label("Options:"))
+        for action in build_parser()._actions:
+            if action.dest == "help" or not action.help:
+                continue
+            out.print(f"  {out.bold(_format_option_invocation(action))}")
+            for line in _wrapped(action.help):
+                out.print(f"{_HELP_INDENT}{out.muted(line)}")
+        if EXAMPLES:
+            out.print()
+            out.print(out.label("Examples:"))
+            for command, comment in EXAMPLES:
+                out.print(f"  {out.bold(command)}")
+                for line in _wrapped(comment):
+                    out.print(f"{_HELP_INDENT}{out.muted(line)}")
+            if EXAMPLES_NOTE:
+                out.print()
+                for line in _wrapped(EXAMPLES_NOTE, indent=""):
+                    out.print(out.muted(line))
+        out.print()
         out.print(out.muted("`fs help <command>` for a command's full "
-                            "grammar; `fs --help` for global flags."))
+                            "grammar."))
         return
     name = requested[0].strip().lower()
     if name not in COMMAND_HELP:
@@ -658,8 +739,7 @@ class Context:
         return self._catalog
 
     def load_tags(self):
-        """`out.tags = catalog.tag_map()` in one place instead of five
-        command modules."""
+        """`out.tags = catalog.tag_map()` in one place, not five."""
         self.out.tags = self.catalog.tag_map()
 
 
@@ -670,8 +750,7 @@ def main(argv=None, directory=None):
     directory = directory or config_mod.config_dir()
     raw = argv if argv is not None else sys.argv[1:]
 
-    # Parsed before `out` exists, so its failure has to be reported without
-    # one. Everything after this point can raise normally.
+    # Parsed before `out` exists, so failure is reported without one.
     try:
         args = split_argv(parser, raw)
     except FsError as e:
@@ -685,10 +764,7 @@ def main(argv=None, directory=None):
     out = Output(today=now.date(), now=now, color=color, json_mode=args.json)
 
     try:
-        # Must work on a machine with no config.toml yet, so answered before
-        # first-run setup can trip.
-        # Checked before the bare-`fs`-defaults-to-`help` fallback below:
-        # `fs --licences` carries no command of its own.
+        # Must work with no config.toml yet -- answered before first-run.
         if args.licences:
             out.print(licence_notices())
             out.finish()
@@ -699,11 +775,8 @@ def main(argv=None, directory=None):
             out.finish()
             return ExitCode.OK
 
-        # `args`-only checks, run before config/session exist so a bad
-        # combination is rejected before first-run prompts for anything.
-        # `--save-password` needs a real login to confirm against, which
-        # `status` (never logs in) and `--no-login` (the direct
-        # contradiction) both rule out.
+        # Run before config/session exist so a bad combination is
+        # rejected before first-run prompts for anything.
         if args.save_password and args.command == "status":
             raise UsageError(
                 "fs status never logs in, so --save-password has nothing "
@@ -738,9 +811,8 @@ def main(argv=None, directory=None):
                                   else _forget_on_invalid_credentials(
                                       out, origin=origin),
             on_login_success=on_success,
-            # Bypasses the cache check so a URL change (a stale session
-            # from the old deployment) and --save-password both force a
-            # fresh login regardless of what's cached.
+            # A URL change (stale session from the old deployment) and
+            # --save-password both force a fresh login regardless of cache.
             force_login=args.save_password or url_changed,
             verbose=(lambda line: print(line, file=sys.stderr))
             if args.verbose else None)
@@ -751,9 +823,7 @@ def main(argv=None, directory=None):
                              hint=f"Try one of: {', '.join(COMMANDS)}, help.")
         code = handler(Context(out, cfg, session, directory, args,
                                cache=CacheStore(directory / "cache.json")))
-        # Backstop for commands (office-days, reset) that never call
-        # session.ensure(): --save-password reaching here without a login
-        # having happened means nothing was prompted for or stored.
+        # Backstop for commands (office-days, reset) that never log in.
         if args.save_password and not session.logged_in_this_run:
             out.warn("--save-password had nothing to confirm: `fs "
                      f"{args.command}` never logs in, so no password was "
@@ -771,9 +841,8 @@ def main(argv=None, directory=None):
         out.warn("")
         return ExitCode.UNEXPECTED
     except Exception as e:                            # noqa: BLE001
-        # Any non-FsError must still reach out.finish() so a --json
-        # consumer reading stdout sees everything; the traceback itself
-        # only shows under --verbose.
+        # Must still reach out.finish() so a --json consumer sees
+        # everything; traceback only shows under --verbose.
         out.warn(out.danger(f"fs: unexpected error: {e}"))
         if args.verbose:
             print(traceback.format_exc(), file=sys.stderr)

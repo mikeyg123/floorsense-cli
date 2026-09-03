@@ -1,22 +1,19 @@
 """Session lifecycle: cache the cookie pair, detect death, re-login once.
 
-`floorsense-api-manual.md` §3 is blunt about the constraint this module exists
-to absorb: the session dies **~60-70 minutes after login regardless of
-activity**. It is an absolute cap, not an idle timeout, and pinging cannot
-extend it -- a fixed-interval experiment showed six clean successes at 10-min
-gaps and death on the seventh. So there is no keep-alive here and there never
-should be. §10: treat "session probably dead" as a normal state, not an error.
+The session dies **~60-70 minutes after login regardless of activity**
+(§3) -- an absolute cap, not an idle timeout, and pinging cannot extend
+it. So there is no keep-alive here. §10: treat "session probably dead" as
+normal, not an error.
 
-Three traps from the manuals are load-bearing here, and each has a test:
+Three load-bearing traps, each with a test:
 
-  * the `id` cookie is stored and replayed **verbatim**. It is an Express
-    signed cookie already containing percent-encoding (`s%3A...`);
-    re-encoding it produces `{"result": false, "message": "not logged in"}`,
-    indistinguishable from expiry (§4.5).
-  * `MYSLSRV` is sent alongside, always. Sessions live in memory on one
-    node and this is what routes back to it; omitting it yields the *same*
-    "not logged in" message from a node that never heard of your session
-    (§3). An auth-shaped symptom with a routing cause.
+  * the `id` cookie is stored and replayed **verbatim** -- it's an
+    Express signed cookie already containing percent-encoding
+    (`s%3A...`); re-encoding it produces the same "not logged in" as
+    expiry (§4.5).
+  * `MYSLSRV` is sent alongside, always -- sessions live in memory on
+    one node, and omitting it yields the *same* "not logged in" from a
+    node that never heard of your session (§3).
   * the CSRF token is re-scraped **after** login, never reused from the
     pre-auth page (§4.5).
 """
@@ -38,9 +35,8 @@ __all__ = ["Session", "SessionStore", "NOT_LOGGED_IN"]
 
 NOT_LOGGED_IN = "not logged in"
 
-# The cap is ~60-70 min (§3). Probing a cookie pair older than this is a
-# wasted round-trip, so don't -- but still probe younger ones, because the
-# cap is approximate and a session can die early.
+# The cap is ~60-70 min (§3) -- don't probe a cookie pair older than this,
+# but still probe younger ones since a session can die early.
 MAX_AGE_S = 55 * 60
 
 FILE_MODE = 0o600
@@ -48,10 +44,7 @@ FILE_MODE = 0o600
 
 class SessionStore:
     """`session.json` -- machine-owned, 0600, holds the live cookie pair.
-
-    A stored pair is a live authenticated session for the account (§11), so
-    it is written 0600 from the moment it exists rather than written and
-    then chmodded.
+    Written 0600 from the moment it exists (§11), never chmodded after.
     """
 
     def __init__(self, path):
@@ -87,7 +80,7 @@ def _restore(cookies, origin):
     s.headers.update(BROWSER_HEADERS)
     host = urlparse(origin).hostname
     for name, value in cookies.items():
-        # Verbatim. Never quote(), never re-encode -- see the module docstring.
+        # Verbatim -- never quote(), never re-encode (module docstring).
         s.cookies.set(name, value, domain=host, path="/")
     return s
 
@@ -101,9 +94,9 @@ def _is_html(resp):
 class Session:
     """The only way the rest of the tool talks to Floorsense.
 
-    `get()`/`post()` wrap every call so that a mid-command session death
-    triggers exactly ONE re-login and retry, then gives up. One, not a loop:
-    a genuinely rejected credential would otherwise re-prompt forever.
+    `get()`/`post()` wrap every call so a mid-command session death
+    triggers exactly ONE re-login and retry, then gives up -- a
+    genuinely rejected credential would otherwise re-prompt forever.
     """
 
     def __init__(self, config, store, on_message=print, allow_login=True,
@@ -121,36 +114,27 @@ class Session:
         self._session = None
         self.csrf = None
         self.logged_in_this_run = False
-        #: `--save-password`'s effect is entirely inside `_fresh_login` --
-        #: that's where `password_provider` is called and `on_login_success`
-        #: fires. `force_login` makes `ensure()` skip the cache check and go
-        #: straight to a fresh login, so the flag always gets its prompt-and-
-        #: confirm cycle regardless of what's cached. `allow_login=False`
-        #: still wins over this -- see `ensure()`.
+        #: `force_login` makes `ensure()` skip the cache check and go
+        #: straight to a fresh login, so `--save-password` always gets
+        #: its prompt-and-confirm cycle. `allow_login=False` still wins
+        #: over this -- see `ensure()`.
         self.force_login = force_login
         #: `okta_user -> None`. Called only when Okta rejected the login
-        #: itself (`InvalidCredentials` -- wrong password/username), never
-        #: on `LOCKED_OUT` or a post-password MFA failure, where the
-        #: password was never the problem. `cli.py` wires this to forget
-        #: the stored password so the NEXT run prompts fresh, rather than
-        #: failing the same way forever (`Session.call`'s one-retry rule
-        #: already forbids retrying within this run).
+        #: itself, never on LOCKED_OUT or a post-password MFA failure.
+        #: `cli.py` wires this to forget the stored password so the NEXT
+        #: run prompts fresh.
         self.on_invalid_credentials = on_invalid_credentials
-        #: `(okta_user, password) -> None`. Called only once login is fully
-        #: confirmed -- after `_probe` proves the landing URL AND cookies,
-        #: not merely after Okta accepted the password -- so a typed
-        #: password never reaches the keychain on the strength of an
-        #: unconfirmed login.
+        #: `(okta_user, password) -> None`. Called only once login is
+        #: fully confirmed, not merely after Okta accepted the password.
         self.on_login_success = on_login_success
 
     # -- establishing a session ---------------------------------------------
 
     def _probe(self, s):
-        """Live? Returns the fresh CSRF token, or None.
-
-        Asserts on the landing URL: `/app/` redirects to `/app/site` when
-        authenticated and `/app/login` when not, and BOTH carry a csrf meta
-        tag -- so the token's presence proves nothing on its own (§3).
+        """Live? Returns the fresh CSRF token, or None. Asserts on the
+        landing URL: `/app/` redirects to `/app/site` when authenticated
+        and `/app/login` when not, and BOTH carry a csrf meta tag -- so
+        the token's presence alone proves nothing (§3).
         """
         try:
             resp = s.get(f"{self.origin}/app/", timeout=30)
@@ -183,13 +167,9 @@ class Session:
         email = self.config.email
         if not okta_user or not email:
             # Defensive: `cli.py`'s `main()` runs first-run setup whenever
-            # `okta_user` is missing, for every command but `reset`, before
-            # a `Session` is even constructed -- so this shouldn't be
-            # reachable from the CLI itself. The hint below must name a
-            # command that actually prompts for `okta_user` (not `fs
-            # status`, which doesn't), since this is exactly the state `fs
-            # reset --full` leaves behind (it clears `okta_user` but leaves
-            # config.toml in place).
+            # `okta_user` is missing, so this shouldn't be reachable from
+            # the CLI itself -- this is the state `fs reset --full` leaves
+            # behind (clears `okta_user`, leaves config.toml in place).
             raise LoginRequired("no Okta username configured",
                                 hint="Run any `fs` command other than "
                                      "`reset` to be prompted for one.")
@@ -200,28 +180,24 @@ class Session:
             token = login_with_push_mfa(self.config.okta_org, okta_user,
                                         password, on_message=self.on_message)
         except InvalidCredentials:
-            # Okta rejected the password itself -- not LOCKED_OUT, not a
-            # post-password MFA failure (both raise something else; see
-            # `InvalidCredentials`'s docstring). If that password came from
-            # the keychain, it is now confirmed dead, and leaving it there
-            # would make every future run fail the exact same way with no
-            # way out -- `Session.call`'s one-retry rule already forbids
-            # retrying within this run, so the fix has to be "next time".
+            # Okta rejected the password itself, not LOCKED_OUT or a
+            # post-password MFA failure. If that password came from the
+            # keychain it's now confirmed dead -- forget it so the fix
+            # is "next time", not every run failing the same way.
             if self.on_invalid_credentials:
                 self.on_invalid_credentials(okta_user)
             raise
         s = floorsense_login(email, token, self.config.okta_org, self.origin)
 
-        # CSRF is session-scoped and login replaced the session, so the token
-        # scraped during login is stale. Re-scrape against the authenticated
-        # one -- reusing the pre-auth token yields the HTML CSRF page (§4.5).
+        # CSRF is session-scoped and login replaced the session, so the
+        # token scraped during login is stale -- reusing it yields the
+        # HTML CSRF page (§4.5).
         csrf = self._probe(s)
         if not csrf:
             # Push MFA and the SSO hop can both succeed but the post-login
             # `/app/` probe lands somewhere other than `/app/site` -- a
-            # transient Floorsense-side redirect, not a bad password (that
-            # fails earlier) or a code bug. `--verbose` (`wire.py`) captures
-            # the actual redirect chain if this needs diagnosing.
+            # transient Floorsense-side redirect. `--verbose` captures the
+            # actual redirect chain if this needs diagnosing.
             raise CommError(
                 "login succeeded but Floorsense redirected somewhere "
                 "unexpected",
@@ -230,23 +206,19 @@ class Session:
         s.headers["x-csrf-token"] = csrf
         self.store.save(cookies_for(s, self.origin))
         self.logged_in_this_run = True
-        # Only NOW is the login actually confirmed (this repo's standing
-        # rule: assert on something true only if it worked, not a proxy for
-        # it) -- so only now, not right after Okta accepted the password, is
-        # it safe to let the password reach the keychain.
+        # Only NOW is login actually confirmed -- not right after Okta
+        # accepted the password -- so only now is it safe for the
+        # password to reach the keychain.
         if self.on_login_success:
             self.on_login_success(okta_user, password)
         return s
 
     def ensure(self):
         """Get a live session: cached if possible, fresh login otherwise.
-
-        `force_login` (`--save-password`) skips the cache check entirely --
-        `_from_cache()` never calls `password_provider` or fires
-        `on_login_success`, so a live cached session would otherwise return
-        straight from there without ever prompting. `_fresh_login` still
-        checks `allow_login` first, so `--no-login` together with
-        `--save-password` still refuses rather than forcing a login.
+        `force_login` (`--save-password`) skips the cache check entirely
+        -- otherwise a live cached session would return without ever
+        prompting. `_fresh_login` still checks `allow_login` first, so
+        `--no-login` + `--save-password` still refuses.
         """
         if self._session is not None:
             return self._session
@@ -266,9 +238,8 @@ class Session:
     # -- calling --------------------------------------------------------------
 
     def _decode(self, resp):
-        """Never `.json()` without checking it isn't HTML: the CSRF failure
-        response is an HTML page and throws on parse, surfacing as a
-        confusing parse error rather than the actual problem (§7)."""
+        """Never `.json()` without checking it isn't HTML: the CSRF
+        failure response is an HTML page and throws on parse (§7)."""
         if _is_html(resp):
             body = (resp.text or "").lstrip()
             if "CSRF Check Failed" in body:
@@ -287,13 +258,8 @@ class Session:
 
     def _xhr_headers(self, extra=None):
         """What the web UI sends on every `/app/*` call, on BOTH verbs.
-
-        It lives here rather than in `api.py` for the same reason redaction
-        lives in `wire.py`: no call site can then forget it. The experiment
-        client sends both headers on every call and works; a missing
-        `Referer` has been observed producing an HTML error page instead of
-        JSON, which surfaces as a CommError about content-type rather than
-        as the actual problem.
+        Lives here, not `api.py`, so no call site can forget it -- a
+        missing `Referer` produces an HTML error page instead of JSON.
         """
         headers = {"X-Requested-With": "XMLHttpRequest",
                    "Referer": f"{self.origin}/app/site"}
@@ -323,9 +289,8 @@ class Session:
         if not self._dead(data):
             return data
 
-        # Exactly one retry. The manual is explicit that this state is
-        # ordinary rather than exceptional -- but a second failure means
-        # something else is wrong, and looping would just re-prompt forever.
+        # Exactly one retry -- a second failure means something else is
+        # wrong, and looping would just re-prompt forever.
         self.store.clear()
         self._session = None
         self.csrf = None

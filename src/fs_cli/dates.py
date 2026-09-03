@@ -1,9 +1,7 @@
-"""Date grammar and printing. Pure: `today` is always injected, never read.
-
-Keeping the clock out of this module is what makes the whole grammar testable
-against fixed dates -- including the boundary cases (`mon` on a Monday,
-`tue-next` in a week where it coincides with `tue`) that are the easiest
-things here to get subtly wrong.
+"""Date grammar and printing. Pure: `today` is always injected, never
+read -- keeps the whole grammar testable against fixed dates, including
+boundary cases (`mon` on a Monday, `tue-next` when it coincides with
+`tue`).
 
 The grammar, case-insensitive throughout:
 
@@ -39,11 +37,9 @@ WEEKDAYS = {
 
 _DOM_RE = re.compile(r"^(\d{1,2})(?:st|nd|rd|th)?$")
 _SLASH_RE = re.compile(r"^(\d{1,2})/(\d{1,2})(?:/(\d{2}|\d{4}))?$")
-# ISO 8601, both spellings people actually type: `2026-08-25` and its
-# separator-free form `20260825`. Explicit `yyyy` (never a 2-digit year,
-# unlike `dd/mm/yy`) is what makes an 8-digit token unambiguous against
-# `_DOM_RE` (1-2 digits only) and `_SLASH_RE` (needs a `/`) -- there is no
-# token either of those already claims that this could collide with.
+# ISO 8601, both spellings: `2026-08-25` and its separator-free form
+# `20260825`. Explicit `yyyy` makes an 8-digit token unambiguous against
+# `_DOM_RE` (1-2 digits) and `_SLASH_RE` (needs a `/`).
 _ISO_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
 _ISO_COMPACT_RE = re.compile(r"^(\d{4})(\d{2})(\d{2})$")
 
@@ -68,11 +64,9 @@ def _next_weekday(today, target, on_or_after=None):
 
 def _next_saturday(today):
     """The first Saturday strictly after today. Anchors every `-next`
-    weekday (`the first X strictly after the next Saturday`); Saturday
-    rather than Monday because a Monday anchor would collapse `tue-next`
-    on a Sunday onto plain `tue`'s result. Doesn't handle `sun-next`
-    itself -- `parse_date` special-cases that target since it's adjacent
-    to this anchor."""
+    weekday; Saturday rather than Monday, since a Monday anchor would
+    collapse `tue-next` on a Sunday onto plain `tue`'s result. Doesn't
+    handle `sun-next` -- `parse_date` special-cases that."""
     return _next_weekday(today, 5)
 
 
@@ -118,17 +112,10 @@ def parse_date(token, today):
         if day is None:
             return None
         if day == 6:
-            # Sunday is adjacent to the Saturday anchor -- `_next_weekday`
-            # of a Saturday for target Sunday is always exactly one day
-            # later, i.e. always the anchor's own week boundary, which is
-            # also what plain `sun` already gives (see `_next_saturday`'s
-            # "Correction" note: the doc only covered Sunday-as-anchor,
-            # not Sunday-as-target). The Saturday-anchor algorithm can
-            # therefore never separate `sun-next` from plain `sun` -- it
-            # collapsed onto it for every starting weekday except Saturday
-            # itself. Sunday's plain form already always names "next
-            # week's Sunday" (the strictly-after rule guarantees that), so
-            # `-next` unconditionally needs one week beyond it instead.
+            # Sunday is adjacent to the Saturday anchor -- the Saturday-
+            # anchor algorithm can never separate `sun-next` from plain
+            # `sun` (always exactly one day past the anchor), so `-next`
+            # unconditionally needs one week beyond plain `sun` instead.
             return _next_weekday(today, 6) + dt.timedelta(days=7)
         return _next_weekday(_next_saturday(today), day)
 
@@ -205,11 +192,10 @@ def _ordinal(n):
 
 
 def fmt_date(d, today):
-    """`Today 27th Aug`, `Tomorrow 28th Aug`, else `Monday 24th Aug` -- with
-    the year appended only when it isn't the current one. Every date the
-    tool prints goes through here; nothing renders a raw dd/mm/yyyy.
-    `Today`/`Tomorrow` still carry the day/month tail so they stay legible
-    next to weekday rows in a mixed table like `fs list`."""
+    """`Today 27th Aug`, `Tomorrow 28th Aug`, else `Monday 24th Aug` --
+    year appended only when it isn't the current one. `Today`/`Tomorrow`
+    still carry the day/month tail so they stay legible next to weekday
+    rows in a mixed table like `fs list`."""
     tail = f"{_ordinal(d.day)} {_MONTHS[d.month - 1]}"
     if d.year != today.year:
         tail = f"{tail} {d.year}"

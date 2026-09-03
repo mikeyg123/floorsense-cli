@@ -30,16 +30,13 @@ from .errors import UsageError
 
 __all__ = ["Config", "config_dir", "load", "save", "guess_okta_user",
            "default_email", "DEFAULT_ORG", "DEFAULT_DOMAIN",
-           "DEFAULT_GROUP_NAME", "BOOKING_BLOCK_REASONS"]
+           "DEFAULT_GROUP_NAME", "DEFAULT_SHOW_TEAM_ON_MAP",
+           "BOOKING_BLOCK_REASONS"]
 
-#: Placeholders, not a working default for any deployment -- every Okta org
-#: and email domain differs, so these can never be a *correct* guess, only
-#: a stand-in that keeps `default_email()`/`Config()` from producing `None`
-#: or a blank string when a `Config` is built without going through
-#: first-run (tests, an already-existing but hand-edited config.toml
-#: missing the key). First run itself (`cli.first_run`) never falls back
-#: to either silently -- it asks for both explicitly (interactive) or
-#: refuses outright (non-interactive) instead.
+#: Placeholders, not a working default for any deployment -- every Okta
+#: org/domain differs, so these are only a stand-in that keeps
+#: `default_email()`/`Config()` from producing `None`. `cli.first_run`
+#: never falls back to either silently -- it asks or refuses outright.
 DEFAULT_ORG = "example.okta.com"
 DEFAULT_DOMAIN = "example.com"
 DEFAULT_BOOK_AHEAD_DAYS = 10
@@ -48,6 +45,10 @@ DEFAULT_BOOK_AHEAD_DAYS = 10
 #: or group of their own. Hand-editable like any other group name -- read
 #: via `Config.default_group`, not hardcoded elsewhere.
 DEFAULT_GROUP_NAME = "preferred"
+
+#: `fs map`'s `show_team_on_map` default -- the reserved, server-backed
+#: team name (`team_cmd.FOLLOWING`; not imported here to avoid a cycle).
+DEFAULT_SHOW_TEAM_ON_MAP = "following"
 
 DIR_MODE = 0o700
 FILE_MODE = 0o600
@@ -65,18 +66,17 @@ def config_dir():
 
 
 def guess_okta_user(shell_user):
-    """The Okta login looks like `firstname.lastname`, so a shell user
-    containing a dot is a good guess and one without is not: `jdoe` is not
-    an Okta login, `jane.doe` probably is. Returning None means "ask"."""
+    """The Okta login looks like `firstname.lastname` -- `jdoe` isn't a
+    good guess, `jane.doe` probably is. `None` means "ask"."""
     if not shell_user or "." not in shell_user:
         return None
     return shell_user
 
 
 def default_email(okta_user, domain=DEFAULT_DOMAIN):
-    """Floorsense's form wants the full email, and it is only ever used to
-    set `login_hint` (`floorsense-api-manual.md` §4.2). Deriving it means the
-    user only ever types `jane.doe`."""
+    """Floorsense's form wants the full email, used only to set
+    `login_hint` (§4.2). Deriving it means the user only types
+    `jane.doe`."""
     if not okta_user:
         return None
     if "@" in okta_user:
@@ -97,6 +97,10 @@ class Config:
     default_group: str = DEFAULT_GROUP_NAME
     groups: dict = field(default_factory=dict)
     teams: dict = field(default_factory=dict)
+    #: `fs map`'s occupied-desk highlight -- a name from `teams`, or the
+    #: reserved `following`. A name matching neither just highlights
+    #: nothing -- see `map_cmd.resolve_team_uids`.
+    show_team_on_map: str = DEFAULT_SHOW_TEAM_ON_MAP
     day_opening_time: str = None
     #: False when no config.toml was on disk -- triggers first-run setup.
     exists: bool = False
@@ -107,21 +111,16 @@ class Config:
 
     def office_day_indexes(self):
         """Configured weekdays as sorted, deduped Monday=0 indexes.
-
-        Unknown values are dropped rather than raising: `config.toml` is
-        meant to be hand-edited, and one typo must not make every command
-        explode.
-        """
+        Unknown values dropped, not raised -- one typo mustn't break
+        every command."""
         seen = {WEEKDAYS[d.strip().lower()] for d in self.office_days
                 if d and d.strip().lower() in WEEKDAYS}
         return sorted(seen)
 
     def next_office_days(self, today):
-        """Office days strictly after today, within `book_ahead_days`.
-
-        This is what `fs book` uses when given no dates. Strictly after,
-        because today is not bookable.
-        """
+        """Office days strictly after today, within `book_ahead_days` --
+        what `fs book` uses given no dates. Strictly after: today isn't
+        bookable."""
         wanted = set(self.office_day_indexes())
         if not wanted:
             return []
@@ -141,7 +140,7 @@ class Config:
                                       self.day_opening_time)
 
 
-_DEFAULT_OPENING_TIME = dt.time(8, 35)
+_DEFAULT_OPENING_TIME = dt.time(8, 28)
 
 
 def _opening_time(day_opening_time):
@@ -185,8 +184,8 @@ BOOKING_BLOCK_REASONS = {
 # --------------------------------------------------------------------------
 
 def _repair(path, want, on_repair):
-    """Fix loose permissions, reporting what was changed. A stored cookie
-    pair is a live authenticated session (§11), so this is not cosmetic."""
+    """Fix loose permissions, reporting what changed -- a stored cookie
+    pair is a live authenticated session (§11), not cosmetic."""
     try:
         current = stat.S_IMODE(os.stat(path).st_mode)
     except OSError:
@@ -213,11 +212,9 @@ def ensure_dir(directory, on_repair=None):
 # --------------------------------------------------------------------------
 
 def load(directory=None, on_repair=None):
-    """Read `config.toml`, repairing permissions on the way past.
-
-    A missing file is not an error -- it is the first-run signal, and comes
-    back as a default Config with `exists=False`.
-    """
+    """Read `config.toml`, repairing permissions on the way past. A
+    missing file is the first-run signal, not an error -- comes back as
+    a default Config with `exists=False`."""
     directory = pathlib.Path(directory or config_dir())
     path = directory / "config.toml"
     if not path.exists():
@@ -246,6 +243,8 @@ def load(directory=None, on_repair=None):
         book_ahead_days=int(prefs.get("book_ahead_days",
                                       DEFAULT_BOOK_AHEAD_DAYS)),
         default_group=prefs.get("default_group", DEFAULT_GROUP_NAME),
+        show_team_on_map=prefs.get("show_team_on_map",
+                                   DEFAULT_SHOW_TEAM_ON_MAP),
         groups={k: list(v) for k, v in (raw.get("groups") or {}).items()},
         teams={k: list(v) for k, v in (raw.get("teams") or {}).items()},
         day_opening_time=prefs.get("day_opening_time"),
@@ -270,6 +269,7 @@ def save(config, directory=None, on_repair=None):
             "office_days": list(config.office_days),
             "book_ahead_days": int(config.book_ahead_days),
             "default_group": config.default_group,
+            "show_team_on_map": config.show_team_on_map,
         },
         "groups": {k: list(v) for k, v in (config.groups or {}).items()},
         "teams": {k: list(v) for k, v in (config.teams or {}).items()},

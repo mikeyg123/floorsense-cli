@@ -1,17 +1,12 @@
 """`fs book [<desk>...|<group>] [<date>...] [new]` -- the rank-comparison
-command PLAN.md specs out in full, built on `plan.py`'s confirm/execute
-pipeline rather than re-deriving the gather/propose/select/run loop.
+command, built on `plan.py`'s confirm/execute pipeline.
 
-One target, many dates. The target is either one or more bare desks (an
-ad-hoc preference list, in the order typed -- a single desk is just that
-list of one), a named `[groups]` entry (an ordered preference list), or --
-given neither -- the configured default group (`config.toml`'s
-`[preferences] default_group`, `preferred` unless changed -- see
-`config.DEFAULT_GROUP_NAME`). A desk list and a group are still mutually
-exclusive -- mixing them, or giving more than one group, is a `UsageError`
-rather than either being silently dropped. For each date the row is decided by
-comparing what's currently booked against the best free+bookable desk in the
-target, per PLAN.md's rank table:
+One target, many dates. The target is one or more bare desks (an ad-hoc
+preference list, in typed order), a named `[groups]` entry, or -- given
+neither -- the configured default group. A desk list and a group are
+mutually exclusive; mixing them, or giving more than one group, is a
+`UsageError`. For each date, the row is decided by comparing what's
+currently booked against the best free+bookable desk in the target:
 
     current None,  best found   -> CREATE
     current None,  no best      -> BLOCKED
@@ -19,27 +14,20 @@ target, per PLAN.md's rank table:
     current ranks better than best (still in the target) -> NOOP
     current ranks worse, or isn't in the target at all    -> REPLACE
 
-The last row is the one PLAN.md calls out as easy to miss: a booking outside
-the target is still replaced, never left alone. And REPLACE always goes
-through `booking-update` on the existing `bkid` -- never release-then-book,
-which risks the day's one-desk-per-group limit refusing the re-create
-(`api.py`'s `refusal_kind`, DESK_LIMIT).
+The last row is easy to miss: a booking outside the target is still
+replaced, never left alone. REPLACE always goes through `booking-update`
+on the existing `bkid` -- never release-then-book, which risks the
+day's one-desk-per-group limit refusing the re-create.
 
 `new`, a literal keyword like `list_cmd.py`'s `following`, drops any date
-that already has an own booking -- in ANY group, not just this run's target
--- before the dates above the table ever reach it: `fs book new` after
-office days books only the gaps, instead of re-confirming every date it
-already holds a desk on.
+that already has an own booking -- in ANY group -- before the table above
+ever reaches it: `fs book new` after office days books only the gaps.
 
-"Best" comes from `catalog.bookable()`, not `catalog.availability()`: a free
-desk the server won't let *you* advance-book is not a candidate (PLAN.md's
-"three things step 7 must not get wrong", #2).
+"Best" comes from `catalog.bookable()`, not `catalog.availability()`: a
+free desk the server won't let *you* advance-book is not a candidate.
 
-A date that's already past, or beyond `Config.book_ahead_days`'s advance
-window, is a `BLOCKED` row decided before `catalog.bookable()` is ever
-called for it (`Config.classify_booking_date`) -- the server keeps no
-booking history and won't accept the write either way, so there's nothing
-to gain from asking it.
+A date that's past, or beyond `book_ahead_days`, is `BLOCKED` before
+`catalog.bookable()` is ever called for it -- nothing to gain from asking.
 """
 
 import datetime as dt
@@ -58,10 +46,9 @@ _ACCEPTS = {TokenType.DATE, TokenType.GROUP, TokenType.DESK}
 
 
 def _group_rank(key, group_keys):
-    """1-based position of `key` in `group_keys`, or None if it isn't there.
-    Local rather than `desks._rank`: that helper walks every NAMED group
-    looking for the first hit, but here there is exactly one ordered list --
-    the target itself -- and its order IS the preference to compare against.
+    """1-based position of `key` in `group_keys`, or None. Local rather
+    than `desks._rank`: here there is exactly one ordered list -- the
+    target itself -- and its order IS the preference to compare against.
     """
     want = normalise(key)
     for i, k in enumerate(group_keys):
@@ -71,14 +58,10 @@ def _group_rank(key, group_keys):
 
 
 def bookings_for_date(bookings, day):
-    """Every own booking that covers `day`. Plural, not singular: the
-    one-desk-per-day limit the manual records is per GROUP (§8), so this
-    account can hold two desks the same day in two different groups --
-    `fs release <date>` releasing only the first of them would be exactly
-    the silent partial action this project's error philosophy rejects.
-    Covers on `finish` first, same reasoning `list_cmd._covers_today_or_later`
-    documents: a multi-day booking's `start` can be before the day it still
-    covers."""
+    """Every own booking that covers `day`. Plural: the one-desk-per-day
+    limit is per GROUP (§8), so this account can hold two desks the same
+    day in two different groups. Covers on `finish` first -- a multi-day
+    booking's `start` can be before the day it still covers."""
     found = []
     for b in bookings:
         start = b.get("start")
@@ -94,11 +77,9 @@ def bookings_for_date(bookings, day):
 
 def booking_for_date(bookings, day):
     """The single own booking covering `day`, for `fs book`'s rank
-    comparison -- which target-per-desk-group already assumes one current
-    booking per group, so the first match is the relevant one. Bookings in
-    OTHER groups the same day are outside the target and don't affect the
-    comparison. See `bookings_for_date` for the plural case `fs release`
-    needs."""
+    comparison -- assumes one current booking per group, so the first
+    match is the relevant one. See `bookings_for_date` for the plural
+    case `fs release` needs."""
     found = bookings_for_date(bookings, day)
     return found[0] if found else None
 
@@ -111,15 +92,12 @@ def cmd_book(ctx):
                          hint="It takes a desk, a group, and dates.")
 
     # After the usage-error check above, not before: a bad `fs book --name`/
-    # `--all` must still fail fast without ever touching the catalog (same
-    # rule find_cmd.py/release_cmd.py already follow).
+    # `--all` must still fail fast without touching the catalog.
     ctx.load_tags()
 
-    # `new` is a literal keyword, stripped before `bind()` sees the tokens --
-    # same shape `list_cmd.py`/`find_cmd.py` use for `following`. It isn't
-    # part of `Vocabulary`: it names no desk, group, date, or team, so
-    # classifying it there would mean teaching every other command's
-    # `Vocabulary` about a word only `fs book` cares about.
+    # `new` is a literal keyword, stripped before `bind()` sees the tokens
+    # (same shape `list_cmd.py` uses for `following`) -- not part of
+    # `Vocabulary`, or every other command's Vocabulary would need to know it.
     tokens = list(ctx.args.args)
     new_only = False
     remaining = []
@@ -139,11 +117,9 @@ def cmd_book(ctx):
 
     desk_targets, group_targets = bound[TokenType.DESK], bound[TokenType.GROUP]
     if desk_targets and group_targets:
-        # Desk keys are the raw catalog form here (`bind()` already resolved
-        # them via `match_desk`) -- render.py's rule ("a desk is ALWAYS
-        # `Output.fmt_desk`") applies to this hint same as anywhere else, so
-        # a group name is shown as typed and a desk key goes through
-        # `fmt_desk` rather than leaking `L5.D.217A` at the user.
+        # Desk keys are the raw catalog form here (`bind()` already
+        # resolved them) -- goes through `fmt_desk` rather than leaking
+        # `L5.D.217A` at the user.
         shown = [out.fmt_desk(d) for d in desk_targets] + group_targets
         raise UsageError("fs book takes a desk list or a group, not both",
                          hint=f"Got: {', '.join(shown)}.")
@@ -152,11 +128,9 @@ def cmd_book(ctx):
                          hint=f"Got: {', '.join(group_targets)}.")
 
     if desk_targets:
-        # `desk_targets` is already in the order typed -- `bind()` appends
-        # each classified token in encounter order -- so it doubles as an
-        # ad-hoc preference list with no further sorting: the rank-table
-        # comparison below (`_group_rank`) treats it exactly like a named
-        # group's ordered desk list, no special-casing needed.
+        # Already in typed order (`bind()` appends in encounter order),
+        # so it doubles as an ad-hoc preference list -- `_group_rank`
+        # treats it exactly like a named group's ordered list.
         target_keys = desk_targets
         target_shown = ", ".join(out.fmt_desk(k) for k in target_keys)
         target_label = target_shown  # only read by the group branch's
@@ -187,32 +161,21 @@ def cmd_book(ctx):
     bookings = own_bookings(api, out.today)
 
     if new_only:
-        # `booking_for_date` -- the same "current" `booking_for_date`/rank
-        # comparison below uses -- is ANY own booking covering the day, not
-        # just one in the target group: "already have a booking" means
-        # that generically, the same reading `already_booked`'s NOOP
-        # branches already give the phrase everywhere else in this file.
+        # ANY own booking covering the day, not just one in the target
+        # group -- "already have a booking" means that generically.
         dates = [d for d in dates if booking_for_date(bookings, d) is None]
 
     if new_only and not dates:
-        # Checked ahead of `used_office_days`, not folded into its branch:
-        # `fs book new` after office days is the invocation this keyword
-        # exists for, and it's exactly the case where every date can come
-        # out already booked. Left to fall into the "on office-days"
-        # branch below, this would print that line and then nothing --
-        # `actions` ends up empty, `confirm()` returns before it can say
-        # " nothing to change" (that message only fires when the plan has
-        # rows but none are selectable, not when it's empty), and
-        # `execute` on an empty plan has nothing to report either. Silent
+        # Checked ahead of `used_office_days`: left to fall into the
+        # "on office-days" branch below, this would print that line and
+        # then nothing -- `actions` ends up empty, and neither `confirm`
+        # nor `execute` reports anything for an empty plan. Silent
         # success and silent no-op must not look the same on stderr.
         out.intent(f"Booking {target_shown} -- nothing new to book")
     elif used_office_days:
-        # No date list here even without `new`: PLAN.md's rank table and
-        # this command's own docstring both treat "on office-days" as the
+        # No date list here even without `new`: "on office-days" is the
         # target description, not a promise to enumerate every date --
-        # spelling out "Tomorrow, Thursday 27th Aug, ..." for a run that
-        # may cover weeks buries the one thing worth saying (which desks)
-        # under a list nobody asked to read.
+        # spelling out weeks of dates buries the one thing worth saying.
         suffix = " desks" if not is_desk_target else ""
         out.intent(f"Booking {target_shown}{suffix} on office-days")
     else:
@@ -257,22 +220,16 @@ def cmd_book(ctx):
             continue
 
         if current_key and not best:
-            # Nothing better is available -- PLAN.md's table has no row for
-            # this (it only spells out REPLACE when a best is found), so
-            # this is the conservative reading: keep what you have rather
-            # than manufacture a replacement target that doesn't exist. Still
-            # a NOOP, not BLOCKED -- there IS a desk held for this day, so
-            # `cmd_book`'s "nothing selectable" check below must not raise
-            # NoDeskAvailable for it.
+            # Nothing better available -- conservative reading: keep what
+            # you have rather than manufacture a replacement that doesn't
+            # exist. Still a NOOP, not BLOCKED -- a desk IS held.
             #
-            # The wording forks on whether the held desk is even IN the
-            # target: "already booked" is right when it's a target member
-            # ranked below everything else that was tried and found
-            # unavailable, but reads as a lie when the held desk belongs to
-            # a DIFFERENT group entirely and the target (e.g. a
-            # `--group quiet-corners` book while sitting on a `preferred`
-            # desk) simply has nothing free -- that's "no change", not "this
-            # is what quiet-corners gave you".
+            # Wording forks on whether the held desk is even IN the
+            # target: "already booked" fits a target member ranked below
+            # everything else tried; "no change" fits a held desk in a
+            # DIFFERENT group entirely (e.g. `--group quiet-corners`
+            # while sitting on a `preferred` desk) -- that's not "this is
+            # what quiet-corners gave you".
             if is_desk_target or _group_rank(current_key, target_keys) is not None:
                 reason = "already booked"
             else:
@@ -293,12 +250,9 @@ def cmd_book(ctx):
             actions.append(Action(out.fmt_date(day), None, None, Kind.BLOCKED,
                                   reason=reason))
 
-    # Exit 6/NO_DESK is reserved for "nothing available" (PLAN.md, `plan.py`
-    # docstring) -- `execute` can't decide that on its own, since a BLOCKED
-    # row is indistinguishable from a NOOP one once nothing is selected. So
-    # it's decided here, before `confirm`, and only when NOTHING in the plan
-    # is selectable: a mix of one CREATE and one BLOCKED is a partial
-    # success, not a failure, so it must still return OK.
+    # Exit 6/NO_DESK is "nothing available" -- decided here, before
+    # `confirm`, only when NOTHING in the plan is selectable: a mix of
+    # one CREATE and one BLOCKED is a partial success, still OK.
     if actions and not any(a.selectable for a in actions):
         blocked = [a for a in actions if a.kind is Kind.BLOCKED]
         if blocked:

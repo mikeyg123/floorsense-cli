@@ -23,10 +23,9 @@ def cmd_status(ctx):
     live = ctx.session.is_live()
     fs_version = version("floorsense-cli")
 
-    # Left-hand labels are dimmed (`out.label`, `render.THEME`'s scaffolding
-    # colour) so the eye lands on the values, not the column of names --
-    # each label keeps its literal trailing padding OUTSIDE the wrap, so
-    # colouring it can't shift where the value starts.
+    # Left-hand labels are dimmed so the eye lands on the values -- each
+    # keeps its trailing padding OUTSIDE the wrap so colouring it can't
+    # shift where the value starts.
     out.print(f"{out.label('Okta user')}      {cfg.okta_user or '(not configured)'}")
     out.print(f"{out.label('Floorsense')}     {cfg.email or '(not configured)'}")
     out.print(f"{out.label('Okta org')}       {cfg.okta_org}")
@@ -44,17 +43,13 @@ def cmd_status(ctx):
     out.print(f"{out.label('Book ahead')}     {cfg.book_ahead_days} days")
     out.print(f"{out.label('Default group')}  {cfg.default_group}")
     if cfg.groups:
-        # Sorted -- `fs desks`/`fs team` (no args) list these alphabetically
-        # too; showing the same config in a different order here would be a
-        # gratuitous inconsistency between two views of the same data.
+        # Sorted -- `fs desks`/`fs team` (no args) list these
+        # alphabetically too; a different order here would be a
+        # gratuitous inconsistency.
         out.print(f"{out.label('Desk groups')}    {', '.join(sorted(cfg.groups))}")
-    # `following` always shown alongside configured teams -- it's Floorsense's
-    # own server-backed team (`fs team following`), not a `config.toml`
-    # entry, but `fs team` (no args) already lists it the same way and this
-    # line should agree with that rather than making it look configured-only.
-    # Its NAME only, never its membership -- listing members would mean a
-    # `booking-summary` call, and `fs status` must never trigger a login
-    # (this module's own docstring/contract) or make a network call at all.
+    # `following` always shown alongside configured teams, agreeing with
+    # `fs team` (no args). NAME only, never membership -- that needs a
+    # `booking-summary` call, and `fs status` must never trigger a login.
     out.print(f"{out.label('Teams')}          "
              f"{', '.join(sorted(set(cfg.teams) | {'following'}))}")
     out.print()

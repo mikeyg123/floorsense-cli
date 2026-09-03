@@ -425,8 +425,9 @@ def test_a_team_delegates_and_fans_out(tmp_path):
     api.booking_list = lambda: []
     api.booking_summary = lambda *a, **kw: {"days": []}
     api.res_list = lambda: []
+    uids = {"Jane Doe": "1", "Bob Smith": "2"}
     api.user_search = lambda name, start, finish: [
-        {"uid": "1", "name": name,
+        {"uid": uids[name], "name": name,
          "future": [{"start": at(TODAY), "key": "L5.D.5", "confirmed": False}]}]
 
     stdout, stderr = io.StringIO(), io.StringIO()

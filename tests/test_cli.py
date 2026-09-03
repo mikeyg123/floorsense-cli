@@ -128,29 +128,39 @@ def test_licenses_us_spelling_is_an_alias(tmp_path, capsys):
     assert "Third-party notices" in capsys.readouterr().out
 
 
-def test_global_help_exits_cleanly(capsys):
-    # argparse's own `-h`/`--help` raises SystemExit(0) rather than
-    # returning -- exercised here so a future change to `build_parser`'s
-    # description/flags can't silently break argparse's help formatting.
-    with pytest.raises(SystemExit) as excinfo:
-        build_parser().parse_args(["--help"])
-    assert excinfo.value.code == 0
-    assert "--no-color" in capsys.readouterr().out
+def test_global_help_flag_does_not_exit(capsys):
+    # `add_help=False`: argparse's own `-h`/`--help` (raises SystemExit(0)
+    # and prints its own plain-text formatting) is disabled -- `--help`/
+    # `-h` is a plain `store_true` flag now, routed through `split_argv`
+    # to `fs help`'s own coloured rendering instead (see the tests below).
+    parsed = build_parser().parse_args(["--help"])
+    assert parsed.help is True
+    assert capsys.readouterr().out == ""
 
 
-def test_okta_user_flag_does_not_wrap_onto_its_own_line(capsys):
-    # `--okta-user OKTA_USER` (argparse's default metavar) was 21 chars --
-    # the single longest option invocation in this parser, which
-    # argparse's HelpFormatter always pushes onto its own line once an
-    # invocation is a couple of characters past its computed column,
-    # regardless of terminal width. `metavar="LOGIN"` keeps it under that
-    # threshold, so its help text stays on the same line as every other
-    # flag instead of leaving a lone `--okta-user LOGIN` line with the
-    # help text starting on the next.
-    with pytest.raises(SystemExit):
-        build_parser().parse_args(["--help"])
+def test_help_flag_is_a_synonym_for_fs_help(cfgdir, capsys):
+    assert main(["--help"], directory=cfgdir) == ExitCode.OK
+    assert "Commands:" in capsys.readouterr().out
+
+
+def test_short_help_flag_is_also_a_synonym(cfgdir, capsys):
+    assert main(["-h"], directory=cfgdir) == ExitCode.OK
+    assert "Commands:" in capsys.readouterr().out
+
+
+def test_help_flag_after_a_command_shows_that_commands_grammar(cfgdir, capsys):
+    from fs_cli.cli import COMMAND_HELP
+
+    assert main(["list", "--help"], directory=cfgdir) == ExitCode.OK
+    assert capsys.readouterr().out.strip() == COMMAND_HELP["list"].detail
+
+
+def test_help_lists_the_global_options_too(cfgdir, capsys):
+    assert main(["help"], directory=cfgdir) == ExitCode.OK
     out = capsys.readouterr().out
-    assert "--okta-user LOGIN     the Okta login, if it differs" in out
+    assert "Options:" in out
+    assert "--no-color" in out
+    assert "--okta-user LOGIN" in out
 
 
 def test_okta_user_flag_overrides_config(cfgdir, capsys):

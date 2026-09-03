@@ -1,23 +1,11 @@
 """Desk identity, desk availability, booking policy, and the locker -- with
 the cache boundary drawn where the data actually differs.
 
-The one decision this module encodes, and the reason it isn't just a dict of
-TTLs: **desk identity and desk permission have completely different
-lifetimes, and caching them together is a bug.**
-
-  * `key`, `cid`, `planid`, `groupid` describe the furniture. They change
-    when the office is rearranged, so 30 days is generous and safe.
-  * `book_advance`, `reserved`, and occupancy describe *this session's view
-    of this day*. `book_advance` is almost certainly evaluated per user
-    (`floorsense-api-manual.md` §5.3) and `reserved` is literally "someone
-    has booked it in the window you asked about". Cached for even an hour,
-    they would have `fs book` offering desks the server then refuses -- which
-    the user experiences as the tool being broken.
-
-So `desks()` is cached and `availability(day)` never is. The numbers say why
-this matters: on the captured Level 5, 15 of 262 desks were free, but only 7
-of those 15 would accept an advance booking. A picker that filters on "free"
-alone is wrong more often than it is right.
+Desk identity (`key`/`cid`/`planid`/`groupid`) changes when the office is
+rearranged, so it's cached 30 days. `book_advance`/`reserved`/occupancy
+describe this session's view of this day -- per-user permission data that
+can't be cached even briefly without `fs book` offering desks the server
+then refuses. So `desks()` is cached and `availability(day)` never is.
 """
 
 import datetime as dt
@@ -27,27 +15,23 @@ import time
 
 __all__ = ["Catalog", "Desk", "DeskState", "CacheStore", "DESK_TTL_S"]
 
-#: Furniture moves rarely. Long, because the cost of a stale entry is one
-#: failed match and a re-read, not a wrong booking.
+#: Furniture moves rarely; a stale entry costs one failed match, not a
+#: wrong booking.
 DESK_TTL_S = 30 * 24 * 3600
 
-#: The locker is checked at most daily -- §8's renewal deadline is ~6 months
-#: away, so a day's staleness cannot matter, and this keeps ordinary commands
-#: at zero extra calls.
+#: The renewal deadline is ~6 months out, so a day's staleness is fine.
 LOCKER_TTL_S = 24 * 3600
 
-#: Policy (`book_day_start`, `book_advance_mins`) changes about as often as
-#: the office does, but it is one cheap call and being wrong about
-#: `book_day_start` means every booking is refused. A day is the compromise.
+#: Cheap to fetch, but being wrong about `book_day_start` means every
+#: booking is refused -- a day is the compromise.
 POLICY_TTL_S = 24 * 3600
 
 FILE_MODE = 0o600
 
 
 class Desk:
-    """Identity only. Deliberately carries no `book_advance` and no
-    `reserved`: this object is cached for a month, and a permission stored on
-    it would be read a month later as though it still meant something."""
+    """Identity only -- no `book_advance`/`reserved`: this is cached for a
+    month, and a permission stored on it would be read a month stale."""
 
     __slots__ = ("key", "cid", "planid", "groupid", "floor", "tags")
 
@@ -75,11 +59,9 @@ class Desk:
 
 class DeskState:
     """A desk as it is for one user on one day. Never cached, never stored.
-
     `bookable` is the only field callers should use to decide whether to
-    offer a desk, and it is the AND of the two conditions that get conflated:
-    nobody has it, and the server will let *you* have it.
-    """
+    offer a desk -- the AND of "nobody has it" and "the server will let
+    you have it", two conditions that get conflated."""
 
     __slots__ = ("desk", "free", "book_advance", "bkid", "uid", "confirmed")
 
@@ -107,12 +89,9 @@ class DeskState:
 
 class CacheStore:
     """`cache.json` -- machine-owned, 0600, holds nothing secret but sits
-    beside things that do, so it is written with the same care.
-
-    Every entry is `{"at": <unix>, "value": ...}`. A corrupt or unreadable
-    cache is treated as an empty one: a cache that can fail the command it
-    was meant to speed up is worse than no cache.
-    """
+    beside things that do. Every entry is `{"at": <unix>, "value": ...}`.
+    A corrupt or unreadable cache is treated as empty: a cache that can
+    fail the command it was meant to speed up is worse than no cache."""
 
     def __init__(self, path):
         self.path = path
@@ -153,9 +132,8 @@ class CacheStore:
 
 
 def day_bounds(day):
-    """Local midnight to local midnight. `floorplan-booking` wants the window
-    as unix timestamps and the date as `DD/MM/YYYY` -- `api.py` handles the
-    second, this handles the first."""
+    """Local midnight to local midnight, as unix timestamps -- `api.py`
+    handles the `DD/MM/YYYY` form `floorplan-booking` also wants."""
     start = dt.datetime.combine(day, dt.time.min).astimezone()
     return int(start.timestamp()), int((start + dt.timedelta(days=1)).timestamp())
 
@@ -174,14 +152,9 @@ class Catalog:
     # -- desk identity (cached) ---------------------------------------------
 
     def planids(self):
-        """Floors that actually have desks.
-
-        `floorplan-list` enumerates four floorplans here and two of them
-        carry zero desks (§5.3), so the list is derived from what
-        `floorplan-booking` returns rather than from the floor list -- and
-        cached alongside the desks, since re-deriving it costs the same calls
-        that building the catalog does.
-        """
+        """Floors that actually have desks -- derived from what
+        `floorplan-booking` returns (some floorplans carry zero desks),
+        not the floor list, and cached alongside `desks()`."""
         if self._planids is None:
             self.desks()
         return self._planids
@@ -251,20 +224,14 @@ class Catalog:
     def tag_map(self):
         """For `desks.fmt_desk`'s `tags` param. Untagged desks are omitted
         rather than mapped to `()` -- `fmt_desk` treats a missing key the
-        same as an empty tuple, and there's no reason to carry one of every
-        desk in this deployment's ~365 for the ~19 that have any."""
+        same way."""
         return {d.key: d.tags for d in self.desks() if d.tags}
 
     def cached_tag_map(self):
         """Like `tag_map()`, but NEVER triggers `desks()`'s live fetch (and
-        therefore never forces a login) -- reads only what's already in
-        memory this run or on disk via `_cached_desks()`, returning `{}` on
-        a cold cache instead of falling through to the network.
-
-        For callers that must keep `fs status`'s "never triggers a login"
-        contract even on a listing path that would *like* to show a tag if
-        one happens to be cheaply known -- `desks_cmd.py`'s bare `fs desks`
-        and `fs desks <name>` (no verb) listings."""
+        therefore never forces a login) -- returns `{}` on a cold cache.
+        For callers that must keep `fs status`'s "never logs in" contract,
+        e.g. `fs desks`'s listings."""
         if self._desks is not None:
             return {d.key: d.tags for d in self._desks if d.tags}
         cached = self._cached_desks()
@@ -274,24 +241,15 @@ class Catalog:
         return {d.key: d.tags for d in desks if d.tags}
 
     def desk_by_key(self, key):
-        """O(1) after the first call -- `availability()` calls this once per
-        desk row per floor per requested date, so a linear scan here becomes
-        O(n^2) work multiplied by `book_ahead_days` for `fs book`/`fs at`/
-        `fs find`'s date loops. The index is built lazily (not inside
-        `desks()` itself, which plenty of callers use without ever needing
-        it) and invalidated wherever `self._desks` is (re)assigned.
-
-        Keys are assumed unique across floors. Built with `setdefault`
-        rather than a `{d.key: d ...}` comprehension so a key seen twice
-        (e.g. a desk double-listed across two floorplans during a floor
-        migration) keeps the first one instead of silently becoming
-        last-match-wins."""
+        """O(1) after the first call -- `availability()` calls this once
+        per desk row per date, so a linear scan would be O(n^2). Built
+        lazily, invalidated wherever `self._desks` is reassigned. Keys
+        assumed unique across floors; `setdefault` keeps the first match
+        if one is ever seen twice."""
         if self._desk_index is None:
-            # Built in a local dict, not `self._desk_index` directly: a
-            # first call's `self.desks()` populates `self._desks` as a side
-            # effect, which resets `self._desk_index` to None itself (see
-            # `desks()`) -- assigning into it while that's still in flight
-            # would have the reset clobber entries added before it fired.
+            # Local dict, not `self._desk_index` directly: `self.desks()`
+            # resets `self._desk_index` to None as a side effect, which
+            # would clobber entries added before it fired.
             index = {}
             for d in self.desks():
                 index.setdefault(d.key, d)
@@ -301,23 +259,15 @@ class Catalog:
     # -- availability (never cached) ----------------------------------------
 
     def availability(self, day, planids=None):
-        """Every desk's state for one day: free, and advance-bookable BY YOU.
+        """Every desk's state for one day: free, and advance-bookable BY
+        YOU. Deliberately not cached -- see the module docstring.
+        `reserved` alone reliably says whether a desk is taken.
 
-        Deliberately not cached and deliberately not memoised across days --
-        see the module docstring. `reserved` is the field that says whether
-        the desk is taken in the window asked about: across all 262 desks of
-        the captured Level 5 it agreed exactly with both the presence of a
-        `bkid` on the desk and membership of the response's `bookings` dict,
-        with zero disagreements, so one field is enough.
-
-        `planids`, when given, restricts the floors actually queried --
-        `bookable()` passes only the floors its `keys` can possibly be on,
-        which is the whole of `fs book`'s per-date cost: one
-        `floorplan-booking` call per floor per date otherwise, most of them
-        wasted work fetching floors the target group has no desk on at all.
-        Defaults to every floor (`self.planids()`) when omitted, which is
-        what every caller other than `bookable()` needs -- `fs at`/`fs find`
-        answer for the whole building, not a preference list.
+        `planids`, when given, restricts the floors queried --
+        `bookable()` passes only the floors its `keys` can be on, avoiding
+        wasted `floorplan-booking` calls. Defaults to every floor, which
+        is what `fs at`/`fs find` need (whole building, not a preference
+        list).
         """
         start, finish = day_bounds(day)
         states = {}
@@ -331,17 +281,11 @@ class Catalog:
                 desk = self.desk_by_key(row["key"]) or Desk(
                     row["key"], row.get("cid"), row.get("planid", planid),
                     row.get("groupid"), floor)
-                # `desks[]`'s own `uid`/`bkid` say WHO and WHICH booking;
-                # `confirmed` (check-in) only lives on the full record in the
-                # sibling `bookings` dict (api.py's `floorplan_booking`).
-                # Matched by `bkid`, not just `records[0]`: every captured
-                # fixture only ever carries one record per desk key, but
-                # nothing guarantees that holds server-side (e.g. a stale,
-                # not-yet-cleaned-up record sitting alongside the current
-                # one) -- reading the record that matches the desk row's own
-                # `bkid` is what keeps `confirmed` describing the booking
-                # `fs at`/`fs list` are actually about, not whichever one the
-                # server happened to list first.
+                # `desks[]` says WHO/WHICH booking; `confirmed` only lives
+                # on the full record in the sibling `bookings` dict.
+                # Matched by `bkid`, not `records[0]` -- nothing guarantees
+                # only one record per key server-side (e.g. a stale one
+                # left alongside the current booking).
                 records = bookings.get(row["key"]) or []
                 bkid = row.get("bkid")
                 match = next((r for r in records if isinstance(r, dict)
@@ -360,22 +304,12 @@ class Catalog:
 
     def bookable(self, day, keys=None):
         """The desks worth offering, in the order given if one is given.
-
-        This is the method `fs book` should call and `availability` is the
-        one it should not: the filter that matters is `bookable`, not `free`.
+        This is the method `fs book` should call, not `availability` --
+        the filter that matters is `bookable`, not `free`.
 
         When `keys` is given, `availability()` is only asked about the
-        floors those keys are actually on -- resolved via `desk_by_key`
-        (identity, cached for a month, so this costs no extra call) rather
-        than every floor in the building. `fs book`'s target is normally one
-        desk or a handful in one or two groups, so this is the difference
-        between one `floorplan-booking` call per date and one per
-        floor-per-date: on the captured deployment (2 non-empty floors),
-        half the calls for a single-floor target, and it only grows with
-        floor count. A `keys` list whose desks don't resolve at all (a stale
-        config entry, say) queries no floor rather than every floor for
-        nothing -- `availability` already returns `{}` in that case, so
-        the empty-list result here is unchanged from before.
+        floors those keys are actually on (via `desk_by_key`, no extra
+        call), not every floor in the building.
         """
         planids = None
         if keys is not None:
@@ -398,16 +332,11 @@ class Catalog:
     # -- own identity (cached like desk identity) ----------------------------
 
     def own_uid(self, refresh=False):
-        """This account's `uid`, discovered rather than configured.
-
-        The only source today is a row in `booking-list` -- a brand-new
-        account with zero bookings has none to read it from, and
-        `user-search` cannot safely stand in: its hits carry no `email`
-        field, so there is nothing in `config.toml` to match a hit against
-        (confirmed live, `scripts/probes/user_lookup_probe.py`;
-        `floorsense-api-manual.md`'s Users section). That gap is still open
-        -- see PLAN.md's "Still open" table.
-        """
+        """This account's `uid`, discovered rather than configured -- the
+        only source is a row in `booking-list`; a brand-new account with
+        zero bookings has none to read it from, and `user-search` can't
+        safely stand in (its hits carry no `email` to match against
+        `config.toml`)."""
         if self.cache is not None and not refresh:
             cached = self.cache.get("own-uid", DESK_TTL_S, self._now())
             if isinstance(cached, str) and cached:
@@ -422,13 +351,8 @@ class Catalog:
 
     def own_ugroupid(self, refresh=False):
         """The account's real `ugroupid` -- the value every policy lookup
-        must use, never a hardcoded default (DECISIONS.md's groupid-footgun
-        entry: `groupid=11, ugroupid=11` was simply wrong; this account's
-        real value is 10).
-
-        `GET /app/user?uid=<uid>` (no `bkid` needed -- confirmed live, see
-        `api.user`) returns it directly. Cached like desk identity: a
-        user's group changes about as often as the furniture does.
+        must use, never a hardcoded default. `GET /app/user?uid=<uid>`
+        returns it directly. Cached like desk identity.
         """
         if self.cache is not None and not refresh:
             cached = self.cache.get("own-ugroupid", DESK_TTL_S, self._now())
@@ -443,19 +367,43 @@ class Catalog:
             self.cache.put("own-ugroupid", ugroupid, self._now())
         return ugroupid
 
+    # -- occupant names (cached like desk identity) --------------------------
+
+    def cached_user_name(self, uid):
+        """A previously resolved `uid -> display name`, straight from the
+        persistent cache -- no API call, `None` on a miss. Written by
+        `at_cmd.occupant_name`; `fs at`/`fs map` both read, so a name
+        resolved by either is available to the other immediately (`fs
+        map`'s live view can show it on the first frame, not a background
+        fetch later). One entry (`"user-names"`) holds the whole
+        `{uid: name}` map, TTL'd as a whole like `desks()`.
+        """
+        if self.cache is None or not uid:
+            return None
+        names = self.cache.get("user-names", DESK_TTL_S, self._now())
+        return names.get(uid) if isinstance(names, dict) else None
+
+    def remember_user_name(self, uid, name):
+        """Persist one resolved `uid -> name`, merged into whatever's
+        already cached. Never called for the API-failure fallback (a
+        bare uid isn't a real name, and caching it would block a future
+        genuine lookup)."""
+        if self.cache is None or not uid or not name:
+            return
+        names = self.cache.get("user-names", DESK_TTL_S, self._now())
+        if not isinstance(names, dict):
+            names = {}
+        names = dict(names)
+        names[uid] = name
+        self.cache.put("user-names", names, self._now())
+
     # -- policy (cached briefly) --------------------------------------------
 
     def policy(self, refresh=False):
         """`book_day_start` and `book_advance_mins`, from the server.
-
-        Read rather than hardcoded because `book_day_start` is what makes a
-        `booking-create` succeed at all: the server stores `start` verbatim
-        and refuses anything off-slot (§8).
-
-        Both `groupid` and `ugroupid` are the account's own `ugroupid` --
-        `floorsense-api-manual.md`'s note on `groupid=11 vs ugroupid=10`:
-        "read the policy once for your own `ugroupid` and use it for every
-        desk", not one policy call per desk group.
+        Read rather than hardcoded because `book_day_start` is what makes
+        `booking-create` succeed -- the server refuses anything off-slot.
+        Read once for the account's own `ugroupid`, not per desk group.
         """
         ugroupid = self.own_ugroupid(refresh=refresh)
         if ugroupid is None:
@@ -474,21 +422,17 @@ class Catalog:
         return (self.policy() or {}).get("book_day_start")
 
     def window_days(self):
-        """The booking window in whole days. `book_advance_mins` was 14400 =
-        exactly 10 days, confirmed against a refusal at ~60 days (§8)."""
+        """The booking window in whole days, from `book_advance_mins`."""
         mins = (self.policy() or {}).get("book_advance_mins")
         return int(mins // (24 * 60)) if isinstance(mins, int) else None
 
     # -- lockers (cached daily) ---------------------------------------------
 
     def lockers(self, refresh=False):
-        """Locker reservations, `finish` being the expiry.
-
-        Cached for a day so the expiry warning costs nothing on ordinary
-        commands -- the deadline it guards against is ~6 months out, so a
-        day's staleness is immaterial and a warning that costs a round trip
-        on every command would be turned off.
-        """
+        """Locker reservations, `finish` being the expiry. Cached for a
+        day -- the expiry deadline is ~6 months out, so a day's staleness
+        is immaterial, and a warning that cost a round trip every command
+        would just get turned off."""
         if self.cache is not None and not refresh:
             cached = self.cache.get("lockers", LOCKER_TTL_S, self._now())
             if isinstance(cached, list):
@@ -501,12 +445,9 @@ class Catalog:
     # -- desk geometry (cached like desk identity) ---------------------------
 
     def _cached_floorplan_raw(self, planid, refresh=False):
-        """Shared cache entry backing `deskpolys()`/`floor_image_size()` --
-        one `floorplan-booking` fetch for both, cached at `DESK_TTL_S` like
-        `desks()`: image dimensions and desk poly geometry are both
-        identity-shaped properties of the floorplan asset, not permission
-        data. Internal -- not part of `Catalog`'s public surface.
-        """
+        """Shared cache entry backing `deskpolys()`/`floor_image_size()`
+        -- one fetch for both, cached like `desks()`: image dimensions
+        and poly geometry are identity-shaped, not permission data."""
         name = f"floorplan-raw-{planid}"
         if self.cache is not None and not refresh:
             cached = self.cache.get(name, DESK_TTL_S, self._now())
@@ -527,21 +468,14 @@ class Catalog:
 
     def deskpolys(self, planid, refresh=False):
         """Desk id -> raw poly rect for every `deskpolys` entry on
-        `planid`, UNFILTERED against the desk catalog -- Level 6 carries 3
-        ghost polys with no catalog desk behind them (§"which polys are
-        real desks" in `docs/floorplan-map-manual.md`). Callers filter
-        against `desks()` themselves before treating an entry as a real
-        desk to render. Cached at `DESK_TTL_S` like `desks()` -- exact
-        pixel geometry is identity-shaped, not permission data.
-        """
+        `planid`, UNFILTERED against the desk catalog -- some polys have
+        no catalog desk behind them. Callers filter against `desks()`
+        themselves before treating an entry as real."""
         return dict(self._cached_floorplan_raw(planid, refresh)["polys"])
 
     def floor_image_size(self, planid, refresh=False):
-        """`(imgwidth, imgheight)` in pixels for `planid`'s floorplan
-        image -- every hand-traced fraction table `map_cmd.py` uses
-        (walls, partitions, room boxes, crop) is in image-fraction terms,
-        so rendering needs this to convert. Shares `deskpolys()`'s cached
-        fetch, not a second call.
-        """
+        """`(imgwidth, imgheight)` in pixels -- `map_cmd.py`'s hand-traced
+        fraction tables need this to convert. Shares `deskpolys()`'s
+        cached fetch, not a second call."""
         raw = self._cached_floorplan_raw(planid, refresh)
         return raw.get("imgwidth"), raw.get("imgheight")

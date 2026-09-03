@@ -1,23 +1,16 @@
-"""`fs release [<date>... | all]` -- built on the same `plan.py` pipeline as
-`fs book`, but with only one kind of row: RELEASE.
+"""`fs release [<date>... | all]` -- built on the same `plan.py` pipeline
+as `fs book`, but with only one kind of row: RELEASE.
 
-No date and no `all` defaults to today (PLAN.md) -- not a usage error.
+No date and no `all` defaults to today, not a usage error.
 
-`all` is a reserved word (PLAN.md), not a date -- it means "every own booking
-from today forward", matching what `fs list` shows. `--all` is the flag
-spelling of the same thing, for scripts that would rather not depend on a
-bare positional surviving the classifier. Either form skips date parsing
-entirely: `all` would otherwise classify as a NAME (`args.py`'s ordered
-predicates never match it to anything else), and treating it as one person's
-name to search for would silently release nothing.
+`all` is a reserved word, not a date -- "every own booking from today
+forward", matching `fs list`. `--all` is the flag spelling. Either form
+skips date parsing entirely: `all` would otherwise classify as a NAME,
+silently releasing nothing.
 
-A requested date with no booking on it is not an error -- it becomes a NOOP
-row saying so, the same "say so rather than staying silent" instinct
-`fs list`'s locker warning and this project's whole error philosophy share.
-
-A PAST date never reaches `own_bookings` at all: the server keeps no
-booking history, so it's reported ("no info for past date") and dropped
-before the fetch, not after.
+A requested date with no booking on it becomes a NOOP row saying so, not
+an error. A PAST date never reaches `own_bookings` -- the server keeps
+no booking history, so it's reported and dropped before the fetch.
 """
 
 import datetime as dt
@@ -54,8 +47,8 @@ def cmd_release(ctx):
         raise UsageError("`all` cannot be combined with dates",
                          hint=f"Got: {', '.join(remaining)}.")
 
-    # After every UsageError check above, not before: a bad `fs release`
-    # invocation must still fail fast without ever touching the catalog.
+    # After every UsageError check above: a bad `fs release` invocation
+    # must still fail fast without touching the catalog.
     ctx.load_tags()
 
     if all_requested:
@@ -75,13 +68,11 @@ def cmd_release(ctx):
         out.intent(f"Releasing bookings for {out.fmt_dates(dates)}")
         actions = []
 
-        # Nothing left to release against -- skip the fetch entirely rather
-        # than query the server for dates it has no record of.
+        # Nothing left to release against -- skip the fetch entirely.
         bookings = own_bookings(api, out.today) if rest else []
         for day in rest:
-            # Plural: this account can hold two desks the same day in two
-            # different groups (the one-per-day limit is per-group, §8), so
-            # a single-booking lookup here would silently leave one behind.
+            # Plural: the one-per-day limit is per-group (§8), so this
+            # account can hold two desks the same day in two groups.
             matches = bookings_for_date(bookings, day)
             if not matches:
                 actions.append(Action(out.fmt_date(day), None, None,

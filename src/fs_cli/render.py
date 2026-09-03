@@ -22,36 +22,29 @@ import sys
 from . import dates as _dates
 from . import desks as _desks
 
-__all__ = ["Output", "table", "supports_color"]
+__all__ = ["Output", "table", "supports_color", "visible_len"]
 
 #: Strips SGR colour codes so column widths are measured by what the
-#: terminal actually draws, not by the byte count of the escape sequence.
-#: `Output.identifier`/`label`/etc. colour a cell's text before it ever
-#: reaches `table()` -- a bare `len()` on that string counts the invisible
-#: `\x1b[1m...\x1b[0m` wrapper as real characters, over-widening that
-#: column and pushing every later cell in the row (and the header, which
-#: is never coloured the same way) out of alignment with it.
+#: terminal actually draws -- a bare `len()` counts the invisible
+#: `\x1b[1m...\x1b[0m` wrapper as real characters, over-widening the column.
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 _ANSI = {"bold": "1", "dim": "2", "reverse": "7", "blink": "5", "red": "31",
-         "green": "32", "yellow": "33", "blue": "34"}
+         "green": "32", "yellow": "33", "blue": "34", "magenta": "35"}
 
-#: Meaning -> `_ANSI` key. This is the one place that decides what colour a
-#: *kind* of thing gets -- every command reaches colour through `Output`'s
-#: semantic methods below (`identifier`/`label`/`muted`/`good`/`attention`/
-#: `danger`), never a raw `.red()`/`.green()` call, so reconfiguring the
-#: palette means editing this dict, not hunting through `commands/*.py` and
-#: `plan.py` for every place that had an opinion about "good" or "bad".
+#: Meaning -> `_ANSI` key. The one place that decides what colour a *kind*
+#: of thing gets -- every command reaches colour through `Output`'s
+#: semantic methods below, never a raw `.red()`/`.green()` call.
 #:
 #:   identifier -- the thing a table is scanned for: a desk key (`fmt_desk`).
 #:   label      -- scaffolding, not data: field labels, table headers.
-#:   muted      -- present but not actionable: BLOCKED/NOOP plan rows,
-#:                 "not stored".
+#:   muted      -- present but not actionable: BLOCKED/NOOP plan rows.
 #:   good       -- state is fine: live session, checked in, password stored.
-#:   attention  -- needs action soon, not yet urgent: locker notice/warning,
-#:                 not checked in.
-#:   danger     -- blocking or wrong: locker banner, `fs: <error>`, a failed
-#:                 row in `plan.execute`.
+#:   attention  -- needs action soon: locker notice/warning, not checked in.
+#:   danger     -- blocking or wrong: locker banner, `fs: <error>`.
+#:   teammate   -- `fs map`'s occupied-desk highlight for a
+#:                 `show_team_on_map` teammate -- ANSI colour 5 (magenta),
+#:                 chosen over a 256-colour orange for portability.
 THEME = {
     "identifier": "bold",
     "label": "dim",
@@ -59,7 +52,14 @@ THEME = {
     "good": "green",
     "attention": "yellow",
     "danger": "red",
+    "teammate": "magenta",
 }
+
+
+def visible_len(text):
+    """`len()`, blind to SGR colour codes. Shared by `table()`'s
+    column-width math and `map_cmd.py`'s status-line layout."""
+    return len(_ANSI_RE.sub("", text))
 
 
 def supports_color(stream=None):
@@ -74,34 +74,23 @@ def supports_color(stream=None):
 
 def table(headers, rows, indent="", row_style=None, cell_style=None,
           header_style=None):
-    """A plain aligned table. The last column is never padded, so lines have
-    no trailing whitespace -- which keeps golden transcripts and copy-paste
-    honest.
+    """A plain aligned table. The last column is never padded, so lines
+    have no trailing whitespace.
 
-    `headers` may be `None`/empty/all-blank for a header-less listing (`fs
-    list`, `fs find`, `fs at` all want this -- a header row is noise on
-    output that's usually three lines).
+    `headers` may be `None`/empty/all-blank for a header-less listing
+    (`fs list`/`find`/`at` -- a header row is noise on 3-line output).
 
-    `row_style(index, line)` -> `str`, if given, is applied to each data row
-    (0-based `index` into `rows`) after alignment -- e.g. dimming a row that
-    isn't selectable. It never runs on the header line, and it sees the
-    already-padded, already-joined text, so wrapping it in ANSI can't perturb
-    the column widths computed from raw length. Because of that, `row_style`
-    is only safe for whole-line effects (or for colouring the LAST column,
-    which is never padded) -- it has no way to find a non-last cell's
-    boundaries once everything is one joined string.
+    `row_style(index, line)`, if given, is applied to each data row
+    after alignment, on the whole joined text -- safe only for whole-line
+    effects or the LAST column (never padded), since there's no way to
+    find a non-last cell's boundary once it's one joined string.
 
-    `cell_style(row_index, col_index, padded_cell, raw_cell)` -> `str`, if
-    given, is applied to ONE cell -- BEFORE it's joined with its
-    neighbours, but AFTER it's padded to `widths[col_index]` (computed from
-    `raw_cell`'s un-ANSI'd length) -- so it can colour any column, not just
-    the last, without perturbing any column's width.
+    `cell_style(row_index, col_index, padded_cell, raw_cell)`, if given,
+    is applied to ONE cell before it's joined but after padding, so it
+    can colour any column without perturbing widths.
 
-    `header_style(line)` -> `str`, if given, is applied to the header line
-    the same way `row_style` is applied to a data line -- AFTER alignment,
-    on the whole already-joined string -- so dimming the header can't
-    perturb the widths computed from the raw header/cell text either. Never
-    runs when there's no header row to show.
+    `header_style(line)`, if given, is applied the same way `row_style`
+    is, to the header line only.
     """
     if not rows:
         return ""
@@ -111,14 +100,11 @@ def table(headers, rows, indent="", row_style=None, cell_style=None,
     heads = [str(h) for h in (headers or [])][:ncols]
     heads += [""] * (ncols - len(heads))
 
-    def vlen(s):
-        return len(_ANSI_RE.sub("", s))
-
-    widths = [max(vlen(heads[i]), *(vlen(r[i]) for r in cells))
+    widths = [max(visible_len(heads[i]), *(visible_len(r[i]) for r in cells))
               for i in range(ncols)]
 
     def vljust(s, width):
-        return s + " " * (width - vlen(s))
+        return s + " " * (width - visible_len(s))
 
     def line(row, row_index=None):
         parts = []
@@ -157,11 +143,9 @@ def _jsonable(value):
 
 
 class Output:
-    """Everything a command prints goes through one of these.
-
-    Commands never touch `print` or `sys.stderr` directly; routing text vs
-    JSON, and stdout vs stderr, is this object's single responsibility.
-    """
+    """Everything a command prints goes through one of these. Commands
+    never touch `print`/`sys.stderr` directly -- routing text vs JSON,
+    stdout vs stderr, is this object's job."""
 
     def __init__(self, today, now=None, groups=None, tags=None, color=False,
                  json_mode=False, stdout=None, stderr=None):
@@ -170,9 +154,8 @@ class Output:
         if self.now is None and today is not None:
             self.now = dt.datetime.combine(today, dt.time.min)
         self.groups = groups or {}
-        # Set by each desk-displaying command once it has `ctx.catalog` in
-        # hand (`catalog.tag_map()`) -- catalog is lazy/per-command, unlike
-        # `groups` which comes from config and is set once in `cli.py`.
+        # Set by each desk-displaying command once it has `ctx.catalog`
+        # (catalog is lazy/per-command, unlike `groups`, set once in cli.py).
         self.tags = tags or {}
         self.json_mode = json_mode
         # ANSI inside a JSON string is never what the caller wanted.
@@ -192,9 +175,9 @@ class Output:
             _desks.fmt_desk(key, self.groups, self.tags.get(key)))
 
     def fmt_dates(self, dates):
-        """Several dates through `fmt_date`, comma-joined -- the shape every
-        intent line needs (`"Today, Tomorrow"`), pulled out once rather
-        than reimplemented per command."""
+        """Several dates through `fmt_date`, comma-joined
+        (`"Today, Tomorrow"`) -- pulled out once rather than
+        reimplemented per command."""
         return ", ".join(self.fmt_date(d) for d in dates)
 
     # -- colour -------------------------------------------------------------
@@ -222,28 +205,26 @@ class Output:
     def blue(self, text):
         return self._wrap("blue", text)
 
+    def magenta(self, text):
+        return self._wrap("magenta", text)
+
     def reverse(self, text):
-        """Reverse (swap fg/bg) video, not a semantic colour -- `fs map`'s
-        live view uses this to mark the cursor cell itself, layered on top
-        of whatever semantic colour that cell already has (free/restricted/
-        booked/yours), so the cursor stays visible under every kind."""
+        """Reverse video, not a semantic colour -- `fs map`'s live view
+        layers this on the cursor cell's own colour so it stays visible
+        under every kind."""
         return self._wrap("reverse", text)
 
     def blink(self, text):
-        """SGR blink (`\\x1b[5m`), not a semantic colour -- layered on top
-        of `reverse` for `fs map`'s live-view cursor cell, since a static
-        reverse-video cell alone is too easy to miss. Depends on terminal
-        support (a few terminals disable blink outright); no portable way
-        to detect that from here, so this is best-effort."""
+        """SGR blink, layered on top of `reverse` for the live-view
+        cursor cell since a static reverse-video cell is too easy to
+        miss. Best-effort -- some terminals disable blink outright."""
         return self._wrap("blink", text)
 
     # -- semantic colour ------------------------------------------------
 
     def style(self, name, text):
-        """Colour by MEANING (`"good"`, `"danger"`, `"identifier"`, ...),
-        looked up in `THEME` at the top of this module -- the one place
-        that decides which raw colour a meaning gets today. Prefer the
-        named convenience methods below at call sites; this is what they're
+        """Colour by MEANING, looked up in `THEME`. Prefer the named
+        convenience methods below at call sites; this is what they're
         built on."""
         return self._wrap(THEME[name], text)
 
@@ -265,6 +246,9 @@ class Output:
     def danger(self, text):
         return self.style("danger", text)
 
+    def teammate(self, text):
+        return self.style("teammate", text)
+
     # -- writing ------------------------------------------------------------
 
     def print(self, text=""):
@@ -275,21 +259,17 @@ class Output:
 
     def intent(self, text):
         """States what a command resolved to do, before it acts (e.g.
-        "Showing bookings for Jane Doe, Tuesday 25th Aug") -- how
-        `-next`-style relative dates stop being ambiguous. Goes to stderr
-        in text mode, since it's not a data row `fs list | head -1` should
-        ever return. Suppressed entirely under --json, unlike `warn` --
-        a --json consumer already gets the resolved values in the payload."""
+        "Showing bookings for Jane Doe, Tuesday 25th Aug"). Goes to
+        stderr in text mode -- not a data row `fs list | head -1` should
+        return. Suppressed entirely under --json; a --json consumer
+        already gets the resolved values in the payload."""
         if not self.json_mode:
             print(text, file=self._stderr)
 
     def prompt(self, text):
-        """An interactive prompt line: written WITHOUT a trailing newline, so
-        the user types right after it (`... [q]uit > `) instead of on the
-        line below it. `plan.py`'s `confirm()`/`pick_one()` are the only
-        callers -- both already refuse to reach this in --json mode (there is
-        no prompt to show a non-interactive consumer), but this stays
-        suppressed there too, matching `print`'s contract."""
+        """An interactive prompt line: written WITHOUT a trailing newline,
+        so the user types right after it (`... [q]uit > `). Stays
+        suppressed under --json too, matching `print`'s contract."""
         if not self.json_mode:
             self._stdout.write(text)
             self._stdout.flush()
@@ -302,13 +282,13 @@ class Output:
             print(text, file=self._stderr)
 
     def emit(self, payload):
-        """Contribute to the --json object. Merged, not printed, so several
-        calls still produce exactly one JSON document."""
+        """Contribute to the --json object. Merged, not printed, so
+        several calls still produce exactly one JSON document."""
         self._payload.update(payload)
 
     def finish(self):
         """Flush the JSON document. Exactly one call, at the end of the
-        command, whether or not anything was emitted."""
+        command."""
         if not self.json_mode:
             return
         doc = _jsonable(dict(self._payload))

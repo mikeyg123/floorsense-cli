@@ -82,21 +82,13 @@ def classify(token, vocab):
 
 
 def split_list(tokens):
-    """Split the trailing argument list.
-
-    Commas are optional except to disambiguate names containing spaces --
-    so: if a comma appears anywhere, commas are the separator and whitespace
-    is part of the name; otherwise each `tokens` entry is already one item.
-
-    The no-comma path used to re-join every token with a space and split the
-    result back apart on whitespace -- harmless when the shell handed over
-    several single-word tokens (`fs release mon tue` -> the same three
-    tokens either way), but destructive the moment one of those tokens was a
-    *quoted* multi-word argument: the shell delivers `fs list "nathan k"` as
-    one token, `"nathan k"`, and the join-then-resplit flattened it right
-    back into two, silently turning a quoted name into two bare-word
-    searches. Each `tokens` entry is already an atomic shell argument by the
-    time it gets here -- trust that boundary instead of re-deriving it.
+    """Split the trailing argument list. Commas are optional except to
+    disambiguate names containing spaces: if a comma appears anywhere,
+    commas are the separator and whitespace is part of the name;
+    otherwise each `tokens` entry is already one item -- a quoted
+    multi-word shell argument (`fs list "nathan k"`) must not get
+    rejoined and resplit on whitespace, or it silently becomes two
+    bare-word searches.
     """
     if not tokens:
         return []
@@ -107,23 +99,16 @@ def split_list(tokens):
 
 
 def peel(tokens, verbs=LIST_VERBS, known_names=()):
-    """Peel the fixed leading positionals off `team`/`desks`.
+    """Peel the fixed leading positionals off `team`/`desks`. Returns
+    `(name, verb, rest)`; `verb` is `None` when neither position holds
+    one, which the caller turns into a usage error rather than an
+    implicit replace.
 
-    Returns (name, verb, rest). `verb` is None when neither position 2 nor
-    (see below) position 1 holds one -- which the caller turns into a
-    usage error rather than an implicit replace. That is the point of
-    having verbs at all: nothing destructive should be reachable by
-    forgetting a word.
-
-    Name-first (`fs team crew add jane`) is tried first and always wins
-    when it matches -- token 2 being a verb literal is enough, regardless
-    of `known_names`. Verb-first (`fs team add crew jane`) is accepted
-    too, but only when it's unambiguous: token 1 must be a verb literal
-    AND NOT itself a real configured name. `known_names` is what makes
-    that call -- pass the caller's current group/team names (case folds
-    internally) so a group or team someone genuinely named "add" or "set"
-    keeps meaning what it always meant (name-first, verb missing, a usage
-    error prompting for one) rather than being silently reinterpreted.
+    Name-first (`fs team crew add jane`) always wins when it matches.
+    Verb-first (`fs team add crew jane`) is accepted only when
+    unambiguous: token 1 is a verb literal AND NOT itself a real
+    configured name -- `known_names` is what makes that call, so a group
+    genuinely named "add" keeps its name-first meaning.
     """
     if not tokens:
         return None, None, []
@@ -163,13 +148,10 @@ def _resolve(token, ttype, vocab):
 
 
 def bind(tokens, vocab, accepts, forced=None):
-    """Classify and group tokens by type.
-
-    `accepts` is the set of types this command understands; anything else is
-    a usage error naming the offending token, rather than being silently
-    dropped. `forced` carries the explicit `--date/--desk/--name/--group`
-    escape hatches, which skip classification but are still resolved -- so
-    `--desk 5235a` still becomes a real catalog key.
+    """Classify and group tokens by type. `accepts` is the set of types
+    this command understands; anything else is a usage error, not a
+    silent drop. `forced` carries the `--date/--desk/--name/--group`
+    escape hatches -- they skip classification but are still resolved.
     """
     out = {t: [] for t in accepts}
 
@@ -200,18 +182,13 @@ def bind(tokens, vocab, accepts, forced=None):
 
 def reject_forced(args, command):
     """Raise a `UsageError` naming any `--date`/`--desk`/`--name`/`--group`/
-    `--all` flag given to a command that has no grammar to route it into.
+    `--all` flag given to a command with no grammar to route it into.
 
-    `status`, `office-days`, `desks`, and `team` never call `bind()` --
-    `desks`/`team` use `peel()` plus direct resolution instead, and
-    `status`/`office-days` take no free-order tokens at all. Without this,
-    those escape-hatch flags are simply never read by such a command, so
-    `fs status --all` or `fs office-days --desk 217a` parse fine and do
-    nothing -- exactly the "silently accept a typo" failure mode
-    `bind()`'s own unknown-token error, and `match_desk`'s ambiguous-key
-    error, exist to avoid everywhere else. `book`/`release`/`find`/`at`
-    don't need this: each already rejects the specific forced types it
-    doesn't accept, inline, as part of its own grammar check.
+    `status`/`office-days`/`desks`/`team` never call `bind()`, so those
+    flags would otherwise simply never be read -- `fs status --all`
+    parsing fine and doing nothing is the "silently accept a typo"
+    failure mode this project avoids elsewhere. `book`/`release`/
+    `find`/`at` don't need this: each rejects its own forced types inline.
     """
     given = [flag for flag, attr in _FORCED_FLAGS if getattr(args, attr)]
     if given:

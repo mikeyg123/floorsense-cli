@@ -1,28 +1,23 @@
 """One method per endpoint, and one place where the envelope is understood.
 
-Everything above this module works in Python data. Everything below it works
-in HTTP. `api.py` is the seam, and it exists mainly to make three traps from
-`floorsense-api-manual.md` unrepeatable rather than merely documented:
+Everything above this module works in Python data; everything below it
+works in HTTP. Exists mainly to make three traps unrepeatable:
 
   * **The envelope is not uniform.** §7 lists four shapes: success with
-    `info`, a JSON failure with `message`, an HTML CSRF page, and -- for
-    `tag-list` -- a bare JSON array with no envelope at all. So
-    `data["result"]` is not a safe universal test, and `unwrap` checks it is
-    looking at a dict before reaching for a key.
-  * **`code: 64` is a catch-all covering five unrelated refusals** (§8), of
-    which exactly one -- the group desk limit -- is a legitimate answer to
-    give the user rather than a sign the client offered something invalid.
-    `refusal_kind` is the single place that branches on `message`, so no
-    caller has to remember that `code` alone means nothing.
-  * **`booking-create` must not be sent a `finish`** (§8). The server
-    computes it, and `start` is stored verbatim, so `book_start_for` is the
-    only way this module lets a caller build one.
+    `info`, a JSON failure with `message`, an HTML CSRF page, and a bare
+    array (`tag-list`). `unwrap` checks it's looking at a dict before
+    reaching for a key.
+  * **`code: 64` is a catch-all covering five unrelated refusals** (§8),
+    of which only the group desk limit is a legitimate answer to give
+    the user. `refusal_kind` is the single place that branches on
+    `message`.
+  * **`booking-create` must not be sent a `finish`** (§8) -- the server
+    computes it. `book_start_for` is the only way this module lets a
+    caller build a `start`.
 
-The HTTP-level requirements -- both cookies, the `x-csrf-token` header, and
-the `X-Requested-With`/`Referer` pair on every verb -- live in `session.py`,
-at the choke point every call already passes through. This module never sets
-a header, which is what stops a new endpoint here from quietly opting out of
-them.
+HTTP-level requirements (cookies, CSRF header, XHR headers) live in
+`session.py`. This module never sets a header, so a new endpoint here
+can't quietly opt out of them.
 """
 
 import datetime as dt
@@ -55,12 +50,10 @@ _REFUSALS = (
 
 
 def refusal_kind(message):
-    """Classify a `code: 64` by its `message`, which is the only part that
-    carries meaning (§8).
-
-    A `booking-update` failure wraps whatever the underlying reason was, so
-    the wrapped reason is looked for first and the wrapper only reported
-    when nothing more specific matches.
+    """Classify a `code: 64` by its `message`, the only part that carries
+    meaning (§8). A `booking-update` failure wraps the underlying reason,
+    so that's looked for first and the wrapper only reported when
+    nothing more specific matches.
     """
     text = (message or "").lower()
     for needle, kind in _REFUSALS:
@@ -71,14 +64,9 @@ def refusal_kind(message):
 
 def unwrap(data, what="the server", request_day=None):
     """`{"result": true, "info": ...}` -> the `info`. Anything else raises.
-
-    A bare array (§7 case 4) is returned as-is: `tag-list` has no envelope,
-    and reaching for `.get` on a list is how that becomes an AttributeError
-    somewhere unhelpful instead of an answer.
-
-    `request_day` is the date the caller asked to book, when known (only
-    `booking_create` passes it). It exists solely to disambiguate
-    `NO_VALID_SLOT`'s hint -- see `_hint_for`.
+    A bare array (§7 case 4) is returned as-is -- `tag-list` has no
+    envelope. `request_day`, when known, disambiguates `NO_VALID_SLOT`'s
+    hint -- see `_hint_for`.
     """
     if isinstance(data, list):
         return data
@@ -108,10 +96,9 @@ _HINTS = {
 }
 
 # NO_VALID_SLOT's usual hint assumes a same-day refusal, but the server
-# collapses "today, before opening time" and "a date already in the past"
-# to the identical "duration not possible" message (§8/§12 of
-# floorsense-api-manual.md). The client can't tell the two apart from the
-# response, but it CAN tell from the date it sent: PLAN.md item 11.
+# collapses "today, before opening time" and "a date already in the
+# past" to the identical "duration not possible" message (§8/§12). Can't
+# tell the two apart from the response, but can from the date sent.
 _PAST_DATE_HINT = "That date has already passed."
 
 
@@ -123,13 +110,11 @@ def _hint_for(kind, request_day=None):
 
 
 def records(info):
-    """The record list out of an `info`, whatever shape it arrived in.
-
-    `booking-list` puts an array directly under `info`; other endpoints put a
-    dict there. Deliberately NOT recursive: §5.1 warns that
-    `floorplan-booking.bookings` is a dict keyed by desk key and
-    `booking-summary.userbookings` a dict keyed by uid, so a
-    flatten-everything helper produces plausible nonsense from both. Callers
+    """The record list out of an `info`, whatever shape it arrived in --
+    `booking-list` puts an array directly under `info`; other endpoints
+    put a dict. Deliberately NOT recursive: `floorplan-booking.bookings`
+    and `booking-summary.userbookings` are dicts keyed by desk/uid, and a
+    flatten-everything helper would produce nonsense from both. Callers
     that want those read them by name.
     """
     if isinstance(info, list):
@@ -141,13 +126,10 @@ def records(info):
 
 def book_start_for(day, book_day_start_mins):
     """The exact `start` a `booking-create` needs: local midnight + the
-    group's `book_day_start` (§8).
-
-    The server stores this **verbatim** -- it does not normalise -- so an
-    approximate value is not merely untidy, it is refused with
-    "Requested booking duration not possible". `book_day_start_mins` comes
-    from the policy endpoint rather than being hardcoded to 480, because it
-    is a per-group setting and only the server knows it.
+    group's `book_day_start` (§8). The server stores this **verbatim** --
+    an approximate value is refused with "duration not possible".
+    `book_day_start_mins` comes from the policy endpoint, not a
+    hardcoded 480, since it's a per-group setting.
     """
     if not isinstance(book_day_start_mins, int):
         raise CommError("no book_day_start from the policy endpoint; refusing "
@@ -158,12 +140,9 @@ def book_start_for(day, book_day_start_mins):
 
 class Api:
     """The endpoint surface, shared by the live and fixture backends.
-
-    Subclasses provide `_get`/`_post`; everything else -- paths, parameter
-    names, and which calls unwrap -- is defined once here so that the test
-    suite exercises the same call shapes the live path does. A fixture
-    backend that reimplemented these methods would be free to drift from the
-    thing it stands in for, which is most of the value gone.
+    Subclasses provide `_get`/`_post`; everything else -- paths,
+    parameter names, which calls unwrap -- is defined once here so the
+    test suite exercises the same call shapes the live path does.
     """
 
     #: §5.1: the server caps this at 15 whatever you ask for, silently.
@@ -184,11 +163,9 @@ class Api:
         return records(unwrap(self._get("booking-list"), "booking-list"))
 
     def booking_summary(self, tz="Pacific/Auckland", days=None):
-        """Own bookings + everyone followed + their bookings + the server's
-        working-day calendar, in one call (§5.1).
-
-        `days` is capped at 15 server-side and the response does not say so
-        -- it comes back byte-identical to a 15-day request. Callers must
+        """Own bookings + everyone followed + their bookings + the
+        server's working-day calendar, in one call (§5.1). `days` is
+        capped at 15 server-side with no indication -- callers must
         count `info["days"]` rather than trusting what they asked for.
         """
         return unwrap(self._get("booking-summary", {
@@ -205,12 +182,9 @@ class Api:
         `DD/MM/YYYY` -- the one parameter in this API that isn't a unix
         timestamp (§5).
 
-        The envelope carries `bookings` as a SIBLING of `info`, not inside
-        it (§5.3) -- keyed by desk key, full booking records including
-        `uid` and `confirmed`, which `info.desks[]`'s own `uid`/`bkid`
-        fields don't have. `unwrap` alone would discard it, so it's folded
-        into the returned `info` under `"bookings"` here, once, rather than
-        making every caller reach past `unwrap` for it.
+        The envelope carries `bookings` as a SIBLING of `info`, not
+        inside it (§5.3) -- full booking records `unwrap` alone would
+        discard, so it's folded into the returned `info` here, once.
         """
         data = self._get("floorplan-booking", {
             "planid": planid, "date": day.strftime("%d/%m/%Y"),
@@ -233,11 +207,9 @@ class Api:
             "user-search"))
 
     def user(self, uid, bkid=None):
-        """One user's identity, including `ugroupid`. `bkid` needs to be a
-        real booking id ONLY per the endpoint's original "for a booking"
-        framing -- confirmed live (`user_lookup_probe.py`) that a
-        self-lookup by `uid` works with `bkid` omitted, so callers that
-        just want their own `ugroupid` don't need one in hand."""
+        """One user's identity, including `ugroupid`. `bkid` needs to be
+        a real booking id only per the endpoint's "for a booking" framing
+        -- a self-lookup by `uid` works with `bkid` omitted."""
         params = {"uid": uid}
         if bkid is not None:
             params["bkid"] = bkid
@@ -253,14 +225,11 @@ class Api:
     # -- writes --------------------------------------------------------------
 
     def booking_create(self, start, key, cid, day=None):
-        """Book a desk. Note there is no `finish` parameter and there must
-        not be: the server computes it, and §8 records that sending one was
-        never necessary. `start` must be exact -- see `book_start_for`.
-
-        `day` is the requested calendar date, passed through to `unwrap`
-        only so it can tell a past-date refusal from a same-day one (both
-        collapse to the same server message -- see `_hint_for`). It plays
-        no part in the request itself.
+        """Book a desk. No `finish` parameter, and there must not be one --
+        the server computes it. `start` must be exact -- see
+        `book_start_for`. `day` is passed through to `unwrap` only so it
+        can tell a past-date refusal from a same-day one (`_hint_for`);
+        it plays no part in the request itself.
         """
         return unwrap(self._post("booking-create", {
             "type": "advance", "start": start, "key": key, "cid": cid}),
@@ -268,14 +237,9 @@ class Api:
 
     def booking_update(self, bkid, key, cid, day=None):
         """Move a booking to another desk. Atomic, same `bkid` (§8) -- the
-        only correct way to rebook, since release-then-book both opens a race
-        and risks the re-create hitting the one-per-day group limit.
-
-        `day` is the requested calendar date, threaded through to `unwrap`
-        for the same reason `booking_create` takes it: a REPLACE row's
-        refusal hits the identical `NO_VALID_SLOT` server message a
-        past-date CREATE does, and without `request_day` this call site
-        would fall back to a misleading same-day hint.
+        only correct way to rebook, since release-then-book opens a race
+        and risks hitting the one-per-day group limit. `day` threaded
+        through to `unwrap` for the same reason `booking_create` takes it.
         """
         return unwrap(self._post("booking-update",
                                  {"bkid": bkid, "key": key, "cid": cid}),
@@ -286,23 +250,17 @@ class Api:
                       "booking-release")
 
     def booking_confirm(self, bkid):
-        """Check in to today's booking -- not documented anywhere in the
-        manual's endpoint list, found instead in the web UI's own JS
-        (`onpage-site-desk-v2.js`'s `action_confirm_booking`). Same shape as
-        `booking_release`: `{"bkid": ...}`, nothing else.
+        """Check in to today's booking -- undocumented, found in the web
+        UI's own JS. Same shape as `booking_release`: `{"bkid": ...}`.
 
-        The web UI gates the "Confirm Booking" button client-side on
-        `book_confirm_app`/`book_early_activate` -- settings baked into
-        `/app/site`'s inline HTML, not returned by any JSON endpoint this
-        module calls, so there is nothing here to read them from. Confirmed
-        live (2026-08-23) that the server enforces the same rule itself and
-        refuses cleanly when it isn't met (`"...outside early activate
-        window"`, `"Booking already confirmed"`) -- both refusals came back
-        with no `code` at all, so `unwrap` raises a plain `CommError` rather
-        than `BusinessRuleRefused`. That's deliberately not special-cased:
-        this module doesn't replicate the client-side gate, so it has no way
-        to tell "too early" apart from any other refusal shape, and the raw
-        message is informative enough on its own."""
+        The web UI gates the "Confirm Booking" button on settings baked
+        into `/app/site`'s HTML, not returned by any JSON endpoint here.
+        The server enforces the same rule and refuses cleanly
+        ("...outside early activate window", "Booking already
+        confirmed") with no `code`, so `unwrap` raises a plain
+        `CommError`, not `BusinessRuleRefused` -- deliberately not
+        special-cased, since this module can't tell "too early" apart
+        from any other refusal shape."""
         return unwrap(self._post("booking-confirm", {"bkid": bkid}),
                       "booking-confirm")
 

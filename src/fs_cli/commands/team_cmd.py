@@ -2,32 +2,24 @@
 grammar for every team, `following` included.
 
 A team member is always a real, looked-up person: `add`/`remove`/`set`
-resolve every typed token via `api.user_search` (an ambiguous hit uses
-`plan.pick_one`; zero hits is `NotFound`) and store the result as
-`{uid, name}`, never the raw string typed. Diffing (current vs. desired,
-for the add/remove/set table) keys on `uid`, mirroring `desks_cmd.py`'s
-`named_list_actions`, which this module reuses rather than re-deriving.
+resolve every typed token via `api.user_search` and store `{uid, name}`,
+never the raw string. Diffing keys on `uid`, reusing `desks_cmd.py`'s
+`named_list_actions`.
 
-The verb may come before the name instead of after it (`fs team add crew
-jane` == `fs team crew add jane`) -- same `peel()`/`known_names`
-disambiguation `desks_cmd.py` documents, with `cfg.teams` plus `following`
-as the collision set a real team name is checked against.
+The verb may come before the name (`fs team add crew jane` == `fs team
+crew add jane`) via `peel()`'s `known_names` disambiguation, with
+`cfg.teams` plus `following` as the collision set.
 
-`following` is not a special code path any more -- it's a team like any
-other, just backed by the server (`friend-create`/`friend-delete`, §5.2)
-instead of a `config.toml` list. `_backend()` is the only place that
-branches on which: it hands back `current` items plus add/remove `run()`
-factories, and everything from there (resolve, diff, build the plan,
-confirm, execute) is one code path. Listing shows `(stored on server)`
-next to `following`'s name so it's clear while viewing or editing that
-this one team's membership isn't in the config file.
+`following` is a team like any other, just backed by the server
+(`friend-create`/`friend-delete`, §5.2) instead of `config.toml`.
+`resolve_team_membership()` is the only place that branches on which;
+everything downstream is one code path. Listing shows `(stored on
+server)` next to `following`'s name.
 
-The one place `following` stays asymmetric, deliberately: `delete` on an
-ordinary team removes the named entry from `config.toml`; `following` has
-no entry to remove, so `delete` there means "unfollow everyone" instead --
-implemented as `named_list_actions("set", current, [], ...)`, the same
-diff that already turns "desired is empty" into a RELEASE row per current
-member, so this isn't new logic either.
+`following` stays asymmetric in one place: `delete` on an ordinary team
+removes the config entry; `following` has none to remove, so `delete`
+there means "unfollow everyone" -- `named_list_actions("set", current,
+[], ...)`, the same diff already used elsewhere.
 """
 
 import datetime as dt
@@ -38,7 +30,7 @@ from ..errors import ExitCode, NotFound, UsageError
 from ..plan import Action, ActionPlan, Kind, confirm, execute, pick_one
 from .desks_cmd import VERB_GERUND, named_list_actions, named_list_deleter
 
-__all__ = ["cmd_team"]
+__all__ = ["cmd_team", "resolve_team_membership", "FOLLOWING"]
 
 FOLLOWING = "following"
 
@@ -47,15 +39,11 @@ FOLLOWING = "following"
 
 def resolve_person(api, out, name, today, prefer_uids=None):
     """Resolve a typed name to `(uid, name)` via a fuzzy `user_search`.
-
     `prefer_uids`, when given (`remove`'s current team members), narrows
-    the server's hits to ones that are actually in that set before
-    offering a choice -- a name that's ambiguous server-wide (multiple
-    "Jane"s) is often unambiguous once scoped to who's actually on the
-    team, so a single team-member hit is used directly instead of still
-    being run past the picker. Falls back to the full hit list when
-    none of them match (typo, or removing someone never added) so that
-    case still gets the normal ambiguous-name/no-match handling.
+    hits to that set before offering a choice -- a name ambiguous
+    server-wide is often unambiguous once scoped to the team. Falls
+    back to the full hit list when none match (typo, or removing
+    someone never added).
     """
     start = int(dt.datetime.combine(today, dt.time.min).astimezone().timestamp())
     finish = int(dt.datetime.combine(today, dt.time.max).astimezone().timestamp())
@@ -119,10 +107,11 @@ def _current_following(api):
 
 # -- picking a backend -----------------------------------------------------
 
-def _backend(ctx, name):
+def resolve_team_membership(ctx, name):
     """`(current, add_run, remove_run)` for `name` -- the one place that
-    knows `following` is server-backed. Everything downstream of this is
-    the same code for every team."""
+    knows `following` is server-backed. Public so other commands needing
+    "who's currently on this team" can reuse it -- `map_cmd.py`'s
+    `resolve_team_uids` is the other caller, reading only `current`."""
     out, cfg, api = ctx.out, ctx.config, ctx.api
     if name == FOLLOWING:
         def follow_add(uid, _label):
@@ -159,14 +148,14 @@ def _list_team_members(out, name, current):
 
 
 def _list_all_teams(ctx):
-    """Bare `fs team`: one team per line, its members alongside it -- not
-    just the team names, so a custom team doesn't look empty until you ask
-    about it by name specifically."""
+    """Bare `fs team`: one team per line with its members, not just
+    names, so a custom team doesn't look empty until asked about
+    directly."""
     out = ctx.out
     all_names = sorted(set(ctx.config.teams) | {FOLLOWING})
     teams = {}
     for name in all_names:
-        current, _, _ = _backend(ctx, name)
+        current, _, _ = resolve_team_membership(ctx, name)
         _print_team_line(out, name, current)
         teams[name] = [{"uid": uid, "name": n} for uid, n in current]
     out.emit({"teams": all_names, "team_members": teams})
@@ -176,9 +165,8 @@ def _list_all_teams(ctx):
 
 def cmd_team(ctx):
     out, cfg, api = ctx.out, ctx.config, ctx.api
-    # `fs team` (including `following`) resolves names directly via
-    # `peel()`/`user_search`, never through `args.bind()`, so these flags
-    # would otherwise be silently ignored rather than doing anything.
+    # `fs team` resolves names directly via `peel()`/`user_search`, never
+    # `args.bind()`, so these flags would otherwise be silently ignored.
     reject_forced(ctx.args, "fs team")
     name, verb, rest = peel(ctx.args.args,
                             known_names=set(cfg.teams) | {FOLLOWING})
@@ -199,11 +187,11 @@ def cmd_team(ctx):
                 hint=f"e.g. `fs team {name} add {rest[0]}`.")
         if not is_following and name not in cfg.teams:
             raise NotFound(f"no team {name!r} configured")
-        current, _, _ = _backend(ctx, name)
+        current, _, _ = resolve_team_membership(ctx, name)
         _list_team_members(out, name, current)
         return ExitCode.OK
 
-    current, add_run, remove_run = _backend(ctx, name)
+    current, add_run, remove_run = resolve_team_membership(ctx, name)
 
     if verb == "delete":
         if rest:
@@ -224,13 +212,11 @@ def cmd_team(ctx):
         if not rest:
             raise UsageError(f"`{verb}` needs at least one name")
         # "Removing team 'crew'" reads like the team itself is being
-        # deleted -- `delete` already owns that phrasing -- so `remove`
-        # gets its own intent line rather than the shared VERB_GERUND one.
+        # deleted (`delete`'s phrasing) -- so `remove` gets its own line.
         out.intent(f"Removing from team {name!r}" if verb == "remove"
                   else f"{VERB_GERUND[verb]} team {name!r}")
         names = split_list(rest)
-        # Scope the fuzzy match to who's actually in the team for
-        # `remove` -- see `resolve_person`'s `prefer_uids` docstring.
+        # Scope the fuzzy match to who's actually in the team for `remove`.
         prefer_uids = {uid for uid, _ in current} if verb == "remove" else None
         items = [resolve_person(api, out, n, out.today, prefer_uids=prefer_uids)
                 for n in names]

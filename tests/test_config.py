@@ -10,7 +10,8 @@ import stat
 
 import pytest
 
-from fs_cli.config import (Config, DEFAULT_GROUP_NAME, default_email,
+from fs_cli.config import (Config, DEFAULT_GROUP_NAME,
+                           DEFAULT_SHOW_TEAM_ON_MAP, default_email,
                            guess_okta_user, load, save)
 
 
@@ -55,6 +56,7 @@ def test_missing_config_loads_as_empty(tmp_path):
     assert c.groups == {} and c.teams == {}
     assert c.exists is False
     assert c.default_group == DEFAULT_GROUP_NAME
+    assert c.show_team_on_map == DEFAULT_SHOW_TEAM_ON_MAP == "following"
 
 
 def test_round_trip(tmp_path):
@@ -63,6 +65,7 @@ def test_round_trip(tmp_path):
                okta_org="example-corp.okta.com",
                office_days=["monday", "thursday"], book_ahead_days=10,
                default_group="quiet-corner",
+               show_team_on_map="crew",
                groups={"quiet-corner": ["L5.D.217A", "L5.D.235A"]},
                teams={"crew": [{"uid": "93980719", "name": "Jane Doe"}]})
     save(c, d)
@@ -70,6 +73,7 @@ def test_round_trip(tmp_path):
     assert back.okta_user == "jamie.baker"
     assert back.office_days == ["monday", "thursday"]
     assert back.default_group == "quiet-corner"
+    assert back.show_team_on_map == "crew"
     assert back.groups["quiet-corner"] == ["L5.D.217A", "L5.D.235A"]
     assert back.teams["crew"][0]["name"] == "Jane Doe"
     assert back.exists is True
@@ -84,6 +88,7 @@ def test_default_group_defaults_when_config_toml_predates_the_setting(
     (d / "config.toml").write_text(
         '[identity]\nokta_user = "jamie.baker"\n\n[preferences]\n')
     assert load(d).default_group == DEFAULT_GROUP_NAME
+    assert load(d).show_team_on_map == DEFAULT_SHOW_TEAM_ON_MAP
 
 
 

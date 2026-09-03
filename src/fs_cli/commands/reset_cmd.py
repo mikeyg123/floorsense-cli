@@ -1,24 +1,19 @@
 """`fs reset [--full]` -- wipe discovered/session state, not user-authored
 config.
 
-PLAN.md's build-order entry for this command drew the line already: clear
-`session.json` (cookies) and `cache.json` (desk catalog, policy, locker
-cache) -- everything the server told us or that login produced, which
-re-derives itself on the next command with no user effort. Leave
-`config.toml`'s `[preferences]`/`[groups]`/`[teams]` alone -- those are
-hand-authored via `fs desks`/`fs team`/`fs office-days` and take real effort
-to rebuild.
+Clears `session.json` (cookies) and `cache.json` (desk catalog, policy,
+locker cache) -- everything server-derived, which rebuilds itself with
+no user effort. Leaves `config.toml`'s `[preferences]`/`[groups]`/
+`[teams]` alone -- hand-authored via `fs desks`/`fs team`/`fs office-days`.
 
-`[identity]` (`okta_user`, `email_domain`, `okta_org`) sits in between: it's
-user-typed-once rather than server-discovered, so the default `fs reset`
-leaves it alone too. `--full` is the escape hatch that also clears it (back
-to unconfigured) and forgets the keychain password with it -- a full
+`[identity]` (`okta_user`, `email_domain`, `okta_org`) is user-typed-once
+rather than server-discovered, so the default `fs reset` leaves it alone
+too. `--full` also clears it and forgets the keychain password -- a full
 "pretend this machine never ran `fs` before".
 
-No `plan.py` pipeline here: there's no row-per-item plan to build, just one
-irreversible action, so this borrows `plan.confirm`'s guard shape (refuse to
-prompt under `--json` or non-interactive stdin without `--yes`) rather than
-its table machinery.
+No `plan.py` pipeline -- one irreversible action, so this borrows
+`plan.confirm`'s guard shape (refuse to prompt under `--json`/non-
+interactive without `--yes`) rather than its table machinery.
 """
 
 import sys

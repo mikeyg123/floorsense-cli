@@ -167,6 +167,18 @@ def test_reverse_off_produces_no_escape_codes():
     assert o.reverse("x") == "x"
 
 
+def test_magenta_is_ansi_colour_5():
+    o = out(color=True)
+    assert o.magenta("x") == "\x1b[35mx\x1b[0m"
+
+
+def test_teammate_is_the_magenta_semantic_style():
+    # `fs map`'s `show_team_on_map` highlight -- see map_cmd.py's
+    # `desk_glyph_kind`/`STYLE_METHOD_BY_KIND`.
+    o = out(color=True)
+    assert o.teammate("x") == o.magenta("x")
+
+
 def test_json_mode_never_emits_colour():
     # Even if colour was explicitly asked for -- ANSI in a JSON string is
     # never what the caller wanted.

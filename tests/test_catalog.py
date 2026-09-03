@@ -376,6 +376,59 @@ def test_own_uid_and_ugroupid_are_cached_across_instances(tmp_path):
     assert "user" not in second.counts
 
 
+# -- occupant names ----------------------------------------------------------
+
+def test_cached_user_name_is_none_before_anything_is_remembered(catalog):
+    assert catalog.cached_user_name("47044577") is None
+
+
+def test_remember_then_cached_user_name_round_trips(catalog):
+    catalog.remember_user_name("47044577", "Jane Doe")
+    assert catalog.cached_user_name("47044577") == "Jane Doe"
+
+
+def test_remembered_names_persist_across_catalog_instances(tmp_path):
+    """The whole point: a name resolved by one `fs at`/`fs map` run is
+    there for the next process, not just the rest of this one -- same
+    cache tier as desk identity/`own_uid`."""
+    path = tmp_path / "cache.json"
+    Catalog(FixtureApi(), CacheStore(path)).remember_user_name(
+        "47044577", "Jane Doe")
+    fresh = Catalog(FixtureApi(), CacheStore(path))
+    assert fresh.cached_user_name("47044577") == "Jane Doe"
+
+
+def test_remembering_a_second_name_does_not_drop_the_first(catalog):
+    catalog.remember_user_name("1", "Jane Doe")
+    catalog.remember_user_name("2", "Bob Smith")
+    assert catalog.cached_user_name("1") == "Jane Doe"
+    assert catalog.cached_user_name("2") == "Bob Smith"
+
+
+def test_remember_user_name_ignores_a_blank_uid_or_name(catalog):
+    catalog.remember_user_name("", "Jane Doe")
+    catalog.remember_user_name("1", "")
+    catalog.remember_user_name(None, "Jane Doe")
+    assert catalog.cached_user_name("") is None
+    assert catalog.cached_user_name("1") is None
+
+
+def test_cached_user_name_is_none_with_no_cache_backing():
+    catalog = Catalog(FixtureApi())   # cache=None, the default
+    assert catalog.cached_user_name("47044577") is None
+    catalog.remember_user_name("47044577", "Jane Doe")   # must not raise
+    assert catalog.cached_user_name("47044577") is None
+
+
+def test_a_stale_user_name_cache_is_not_returned(tmp_path, monkeypatch):
+    path = tmp_path / "cache.json"
+    catalog = Catalog(FixtureApi(), CacheStore(path))
+    monkeypatch.setattr(catalog, "_now", lambda: 1000.0)
+    catalog.remember_user_name("47044577", "Jane Doe")
+    monkeypatch.setattr(catalog, "_now", lambda: 1000.0 + DESK_TTL_S)
+    assert catalog.cached_user_name("47044577") is None
+
+
 # -- policy ----------------------------------------------------------------
 
 def test_policy_supplies_the_booking_start_rather_than_a_hardcoded_480(catalog):

@@ -15,14 +15,16 @@ from fs_cli.commands.map_cmd import (
     cmd_map, crop_window, desk_at_click, desk_centers, desk_glyph_kind,
     draw_box, draw_polyline, floor_aliases, floor_names, header_line,
     local_ranks, nearest_desk, plan_for_cursor, quantize_axis, render_floor,
-    resolve_floor, row_pitch, scroll_window, terminal_columns,
+    resolve_floor, resolve_team_uids, row_pitch, scroll_window,
+    terminal_columns,
 )
 from live_write_api import LiveWriteApi
 from fs_cli.commands.map_cmd import (
-    _run_live, _status_line, _initial_cursor_key, _render_lines)
+    _run_live, _status_line, _confirm_line, _clip_visible,
+    _right_justify_hint, _initial_cursor_key, _render_lines)
 from fs_cli.errors import ExitCode, UsageError
 from fs_cli.fixtures import FixtureApi
-from fs_cli.render import Output
+from fs_cli.render import Output, visible_len
 
 GOLDEN_DIR = pathlib.Path(__file__).parent / "golden"
 TODAY = dt.date(2026, 8, 25)   # a Tuesday
@@ -193,12 +195,50 @@ def test_desk_glyph_kind_none_desk_states_means_legacy_free_everywhere():
     assert desk_glyph_kind("A", set(), None) == "free"
 
 
-def test_glyph_by_kind_has_exactly_the_four_kinds():
-    assert set(GLYPH_BY_KIND) == {"free", "restricted", "booked", "yours"}
+def test_desk_glyph_kind_booked_by_a_team_uid_is_team():
+    states = {"A": DeskState(desk=None, free=False, book_advance=True,
+                             uid="jane-uid")}
+    assert desk_glyph_kind("A", set(), states, {"jane-uid"}) == "team"
+
+
+def test_desk_glyph_kind_booked_by_a_non_team_uid_stays_booked():
+    states = {"A": DeskState(desk=None, free=False, book_advance=True,
+                             uid="stranger-uid")}
+    assert desk_glyph_kind("A", set(), states, {"jane-uid"}) == "booked"
+
+
+def test_desk_glyph_kind_yours_wins_over_team():
+    # Your own desk is never also drawn as a teammate's, even if you're
+    # on that team yourself.
+    states = {"A": DeskState(desk=None, free=False, book_advance=True,
+                             uid="jane-uid")}
+    assert desk_glyph_kind("A", {"A"}, states, {"jane-uid"}) == "yours"
+
+
+def test_desk_glyph_kind_a_missing_or_uidless_state_is_never_team():
+    # Missing entirely -- falls back to the conservative "booked", not
+    # "team": there's no uid to match against `team_uids` at all.
+    assert desk_glyph_kind("ghost", set(), {}, {"jane-uid"}) == "booked"
+    states = {"A": DeskState(desk=None, free=False, book_advance=True)}
+    assert desk_glyph_kind("A", set(), states, {"jane-uid"}) == "booked"
+
+
+def test_desk_glyph_kind_team_uids_defaults_to_no_highlighting():
+    # No `team_uids` given at all -- every existing call site (before
+    # `show_team_on_map` existed) keeps behaving exactly as before.
+    states = {"A": DeskState(desk=None, free=False, book_advance=True,
+                             uid="jane-uid")}
+    assert desk_glyph_kind("A", set(), states) == "booked"
+
+
+def test_glyph_by_kind_has_exactly_the_five_kinds():
+    assert set(GLYPH_BY_KIND) == {"free", "restricted", "booked", "yours",
+                                  "team"}
     assert GLYPH_BY_KIND["free"] == "▢"
     assert GLYPH_BY_KIND["restricted"] == "■"
     assert GLYPH_BY_KIND["booked"] == "■"
     assert GLYPH_BY_KIND["yours"] == "▣"
+    assert GLYPH_BY_KIND["team"] == "■"
 
 
 def _catalog(tmp_path):
@@ -707,11 +747,14 @@ def test_resolve_floor_multi_desk_covering_booking_highlights_only_its_own_floor
 
 
 class Config:
-    def __init__(self, book_ahead_days=10, day_opening_time=None):
+    def __init__(self, book_ahead_days=10, day_opening_time=None,
+                 show_team_on_map="following"):
         self.groups = {}
         self.teams = {}
         self.book_ahead_days = book_ahead_days
         self.day_opening_time = day_opening_time
+        self.default_group = "preferred"
+        self.show_team_on_map = show_team_on_map
 
     def booking_window(self, today, now):
         from fs_cli.config import _booking_window
@@ -759,6 +802,66 @@ def run(catalog, api, args, today, color=False):
 def _catalog_and_api(tmp_path):
     api = FixtureApi()
     return Catalog(api, CacheStore(tmp_path / "cache.json")), api
+
+
+def _ctx(config, api, catalog=None):
+    out = Output(today=dt.date(2026, 9, 1), stdout=io.StringIO(),
+                stderr=io.StringIO())
+    return Ctx(out, config, api, catalog, Args())
+
+
+# -- show_team_on_map: resolve_team_uids ------------------------------------
+
+def test_resolve_team_uids_with_a_local_team(tmp_path):
+    catalog, api = _catalog_and_api(tmp_path)
+    config = Config()
+    config.teams = {"crew": [{"uid": "u1", "name": "Jane"},
+                             {"uid": "u2", "name": "Bob"}]}
+    config.show_team_on_map = "crew"
+    assert resolve_team_uids(_ctx(config, api, catalog)) == {"u1", "u2"}
+
+
+def test_resolve_team_uids_with_following(tmp_path):
+    catalog, api = _catalog_and_api(tmp_path)
+    api.booking_summary = lambda **kw: {"users": [{"uid": "u3", "name": "Alex"}]}
+    config = Config()
+    config.show_team_on_map = "following"
+    assert resolve_team_uids(_ctx(config, api, catalog)) == {"u3"}
+
+
+def test_resolve_team_uids_is_case_and_whitespace_tolerant_on_following(tmp_path):
+    catalog, api = _catalog_and_api(tmp_path)
+    api.booking_summary = lambda **kw: {"users": [{"uid": "u3", "name": "Alex"}]}
+    config = Config()
+    config.show_team_on_map = "  Following  "
+    assert resolve_team_uids(_ctx(config, api, catalog)) == {"u3"}
+
+
+def test_resolve_team_uids_unknown_team_name_is_empty_not_an_error(tmp_path):
+    catalog, api = _catalog_and_api(tmp_path)
+    config = Config()
+    config.show_team_on_map = "nope-typo"
+    assert resolve_team_uids(_ctx(config, api, catalog)) == frozenset()
+
+
+def test_resolve_team_uids_blank_is_empty_and_never_touches_the_api(tmp_path):
+    class _ExplodingApi:
+        def booking_summary(self, **kw):
+            raise AssertionError("should never be called for a blank name")
+    config = Config()
+    config.show_team_on_map = ""
+    assert resolve_team_uids(_ctx(config, _ExplodingApi())) == frozenset()
+
+
+def test_resolve_team_uids_swallows_a_failed_following_lookup(tmp_path):
+    catalog, api = _catalog_and_api(tmp_path)
+
+    def _boom(**kw):
+        raise RuntimeError("session hiccup")
+    api.booking_summary = _boom
+    config = Config()
+    config.show_team_on_map = "following"
+    assert resolve_team_uids(_ctx(config, api, catalog)) == frozenset()
 
 
 def test_fs_map_with_no_args_defaults_to_level5_no_bookings(tmp_path):
@@ -944,6 +1047,78 @@ def test_cmd_map_colours_desks_by_live_status_when_color_is_on(tmp_path):
     assert "\x1b[2m" in out    # dim -- muted -- restricted desks
     assert "\x1b[31m" in out   # red -- danger -- booked desks
     assert "\x1b[33m" in out   # yellow -- attention -- yours (L5.D.236A)
+
+
+def _availability_with_a_teammate(catalog, uid):
+    """Patches `catalog.availability` to reassign one already-booked desk
+    (from the real fixture data) to `uid` -- end-to-end `show_team_on_map`
+    coverage without hand-editing fixture JSON (this project's fixtures
+    are real captured responses, not hand-written -- see CLAUDE.md's
+    testing section)."""
+    real_availability = catalog.availability
+
+    def _tagged(day, planids=None):
+        states = dict(real_availability(day, planids=planids))
+        key = next(k for k, s in states.items() if not s.free)
+        s = states[key]
+        states[key] = DeskState(desk=s.desk, free=False,
+                                book_advance=s.book_advance, bkid=s.bkid,
+                                uid=uid, confirmed=s.confirmed)
+        return states
+    catalog.availability = _tagged
+
+
+def test_cmd_map_colours_a_teammates_desk_magenta_when_show_team_on_map_matches(
+        tmp_path):
+    catalog, api = _catalog_and_api(tmp_path)
+    _availability_with_a_teammate(catalog, "teammate-uid")
+    config = Config()
+    config.teams = {"crew": [{"uid": "teammate-uid", "name": "Jane"}]}
+    config.show_team_on_map = "crew"
+    stdout, stderr = io.StringIO(), io.StringIO()
+    out = Output(today=dt.date(2026, 9, 1), color=True, stdout=stdout,
+                stderr=stderr)
+    code = cmd_map(Ctx(out, config, api, catalog, Args()))
+    out.finish()
+    assert code == ExitCode.OK
+    # `_map_and_legend`: the legend itself always carries a "■ team"
+    # magenta swatch (same as "■ unavailable" always appearing) -- assert
+    # against the map BODY, not the whole output, or this can't tell
+    # "a desk is actually highlighted" from "the legend key exists".
+    map_body, _legend = _map_and_legend(stdout.getvalue())
+    assert "\x1b[35m" in map_body   # magenta -- ANSI colour 5
+
+
+def test_cmd_map_no_magenta_when_the_configured_team_matches_nobody(tmp_path):
+    catalog, api = _catalog_and_api(tmp_path)
+    config = Config()
+    config.show_team_on_map = "crew"   # configured, but no uid in
+                                       # desk_states matches anyone in it
+    stdout, stderr = io.StringIO(), io.StringIO()
+    out = Output(today=dt.date(2026, 9, 1), color=True, stdout=stdout,
+                stderr=stderr)
+    code = cmd_map(Ctx(out, config, api, catalog, Args()))
+    out.finish()
+    assert code == ExitCode.OK
+    map_body, _legend = _map_and_legend(stdout.getvalue())
+    assert "\x1b[35m" not in map_body
+
+
+def test_cmd_map_following_highlights_a_followed_colleagues_desk(tmp_path):
+    catalog, api = _catalog_and_api(tmp_path)
+    _availability_with_a_teammate(catalog, "followed-uid")
+    api.booking_summary = lambda **kw: {"users": [
+        {"uid": "followed-uid", "name": "Alex"}]}
+    config = Config()
+    config.show_team_on_map = "following"   # the default
+    stdout, stderr = io.StringIO(), io.StringIO()
+    out = Output(today=dt.date(2026, 9, 1), color=True, stdout=stdout,
+                stderr=stderr)
+    code = cmd_map(Ctx(out, config, api, catalog, Args()))
+    out.finish()
+    assert code == ExitCode.OK
+    map_body, _legend = _map_and_legend(stdout.getvalue())
+    assert "\x1b[35m" in map_body
 
 
 def test_plan_for_cursor_free_with_no_current_booking_is_create():
@@ -1346,6 +1521,62 @@ def test_run_live_shows_a_booked_desks_occupant_once_the_background_fetch_lands(
     assert "A Stranger" in out._stdout.getvalue()
 
 
+def test_run_live_shows_a_persistently_cached_occupant_on_the_first_frame(
+        tmp_path):
+    # The whole point: a name resolved by an EARLIER run is already in
+    # `cache.json`, so it shows up on this run's very first frame -- no
+    # background fetch (and so no `/user` call for the occupant, no
+    # `spawn`) needed at all for a desk whose occupant was seen before.
+    # `/user` is still allowed for OTHER uids (`_run_live` looks up its
+    # own `ugroupid` via `book_day_start_mins()` regardless) -- only the
+    # occupant's own uid must never reach it.
+    catalog = Catalog(LiveWriteApi(), CacheStore(tmp_path / "cache.json"))
+    today = dt.date(2026, 9, 1)
+    planid = PLANID_LEVEL5
+    polys = catalog.deskpolys(planid)
+    catalog_keys = {d.key for d in catalog.desks() if d.planid == planid}
+    img_w, img_h = catalog.floor_image_size(planid)
+    desk_states = catalog.availability(today, planids=[planid])
+    grid, highlight_positions, desk_kind_positions, desk_positions = \
+        render_floor(planid, polys, catalog_keys, img_w, img_h,
+                    highlight_keys=set(), desk_states=desk_states)
+    busy_key = next(key for key, pos in desk_positions.items()
+                    if desk_kind_positions.get(pos) == "booked"
+                    and desk_states[key].uid)
+    occupant_uid = desk_states[busy_key].uid
+    catalog.remember_user_name(occupant_uid, "Cached Colleague")
+
+    # `LiveWriteApi` delegates via `__getattr__`, so an instance-attribute
+    # override (not a subclass -- `super()` doesn't reach `__getattr__`
+    # cleanly through it) is what actually intercepts just this one uid.
+    api = catalog.api
+    real_user = api.user
+
+    def guarded_user(uid, bkid=None):
+        if uid == occupant_uid:
+            raise AssertionError("must not call /user for a cache hit")
+        return real_user(uid, bkid=bkid)
+    api.user = guarded_user
+
+    # A synchronous spawn, same as the sibling test above -- a NEIGHBOUR
+    # desk's occupant (a genuine cache miss) legitimately still spawns a
+    # fetch; `guarded_user` above is what actually proves `occupant_uid`
+    # itself never reaches the API.
+    def spawn(target, args):
+        target(*args)
+
+    out = Output(today=today, stdout=io.StringIO(), stderr=io.StringIO())
+    ctx = Ctx(out, Config(), api, catalog, Args())
+    code = _run_live(ctx, planid, today, grid, highlight_positions,
+                     desk_kind_positions, desk_positions, columns=200,
+                     read_key=ScriptedKeys(["q"]),
+                     initial_cursor_key=busy_key,
+                     desk_states=desk_states, spawn=spawn)
+
+    assert code == ExitCode.OK
+    assert "Cached Colleague" in out._stdout.getvalue()
+
+
 def test_prefetch_occupants_also_fetches_the_four_neighbours():
     # The whole point of prefetching: by the time an arrow key actually
     # lands on a booked neighbour, its lookup should already be in
@@ -1402,6 +1633,62 @@ def test_prefetch_occupants_does_not_duplicate_an_in_flight_fetch():
                         spawn=lambda target, args: scheduled.append(target))
 
     assert scheduled == []
+
+
+def test_prefetch_occupants_also_fetches_a_team_desk():
+    # "team" (show_team_on_map) needs the same occupant-name fetch a
+    # plain "booked" desk gets -- without it, a teammate's desk was
+    # coloured magenta but its status line always said "unavailable"
+    # (never named who it actually was).
+    from fs_cli.commands.map_cmd import _prefetch_occupants
+
+    class _State:
+        def __init__(self, uid, bkid):
+            self.uid, self.bkid = uid, bkid
+
+    desk_positions = {"A": (0, 0), "B": (0, 10)}
+    desk_kind_positions = {(0, 0): "free", (0, 10): "team"}
+    desk_states = {"B": _State("u-b", "bk-b")}
+    scheduled = []
+    names, pending = {}, set()
+
+    _prefetch_occupants(api=None, own_uid=None, desk_states=desk_states,
+                        desk_kind_positions=desk_kind_positions,
+                        desk_positions=desk_positions, cursor_key="A",
+                        cursor_pos=(0, 0), names=names, pending=pending,
+                        spawn=lambda target, args: scheduled.append(target))
+
+    assert pending == {"u-b"}
+    assert len(scheduled) == 1
+
+
+def test_fetch_occupant_uses_a_persistent_cache_hit_synchronously():
+    # The whole point of threading `catalog` through: a name resolved on
+    # an EARLIER run is available on THIS one's very first frame -- no
+    # thread spawn at all for a cache hit, so there's no window where the
+    # name is momentarily missing.
+    from fs_cli.commands.map_cmd import _fetch_occupant_if_needed
+
+    class _State:
+        def __init__(self, uid, bkid):
+            self.uid, self.bkid = uid, bkid
+
+    class _Catalog:
+        def cached_user_name(self, uid):
+            return "Jane Doe" if uid == "u-a" else None
+
+    desk_states = {"A": _State("u-a", "bk-a")}
+    names, pending = {}, set()
+    scheduled = []
+
+    _fetch_occupant_if_needed(api=None, own_uid=None, desk_states=desk_states,
+                              key="A", kind="booked", names=names,
+                              pending=pending, spawn=lambda t, a: scheduled.append(t),
+                              catalog=_Catalog())
+
+    assert names == {"u-a": "Jane Doe"}
+    assert scheduled == []          # no background fetch needed at all
+    assert pending == set()         # never added -- nothing is in flight
 
 
 class _FakeSession:
@@ -1906,6 +2193,28 @@ def test_status_line_names_the_occupant_without_the_word_booked():
     assert "booked by" not in line
 
 
+def test_status_line_names_a_teammates_occupant_too():
+    # Bug: a "team" desk (show_team_on_map, coloured magenta on the grid)
+    # fell into the same catch-all branch as an unclassified kind and
+    # always said "unavailable" -- never named who it actually was, even
+    # once the occupant fetch had landed.
+    out = Output(today=dt.date(2026, 9, 1), stdout=io.StringIO(),
+                stderr=io.StringIO())
+    line = _status_line(out, "5.12", "team", None, occupant="Jane Doe")
+    assert "Jane Doe" in line
+    assert "unavailable" not in line
+
+
+def test_status_line_team_with_no_occupant_yet_is_plain_unavailable():
+    # The fetch (background, or a synchronous cache hit) hasn't landed
+    # yet -- falls back to "unavailable" same as a plain "booked" desk
+    # does, not an exception or a blank name.
+    out = Output(today=dt.date(2026, 9, 1), stdout=io.StringIO(),
+                stderr=io.StringIO())
+    line = _status_line(out, "5.12", "team", None, occupant=None)
+    assert "unavailable" in line
+
+
 def test_status_line_lists_the_day_and_floor_keys():
     # Feedback: the day (PgUp/PgDn/n/p) and floor (5/6) keys weren't
     # discoverable at all -- only move/quit were ever shown.
@@ -1914,6 +2223,92 @@ def test_status_line_lists_the_day_and_floor_keys():
     line = _status_line(out, "5.12", "free", None)
     assert "[n/p] day" in line
     assert "[5/6] floor" in line
+
+
+# -- right-justified keyboard hints, and the 2-terminal-row wrap fix -------
+
+def test_status_line_right_justifies_the_hint_to_the_terminal_width():
+    # `columns - 1`, not `columns`: filling to the exact last column is a
+    # known terminal-emulator landmine -- see `_right_justify_hint`'s
+    # docstring. One column stays deliberately blank.
+    out = Output(today=dt.date(2026, 9, 1), stdout=io.StringIO(),
+                stderr=io.StringIO())
+    line = _status_line(out, "5.12", "free", None, columns=80)
+    assert visible_len(line) == 79
+    assert line.endswith("[q] quit")
+    assert line.startswith("5.12 free")
+
+
+def test_confirm_line_right_justifies_the_hint_too():
+    out = Output(today=dt.date(2026, 9, 1), stdout=io.StringIO(),
+                stderr=io.StringIO())
+    line = _confirm_line(out, "release", "5.12", dt.date(2026, 9, 1),
+                         columns=60)
+    assert visible_len(line) == 59
+    assert line.endswith("[Esc] cancel")
+
+
+def test_status_line_with_no_known_width_falls_back_to_plain_concatenation():
+    # `columns=None` (the default): no terminal to justify/clip against,
+    # same "nothing to crop to" rule `crop_window` follows elsewhere in
+    # this module.
+    out = Output(today=dt.date(2026, 9, 1), stdout=io.StringIO(),
+                stderr=io.StringIO())
+    line = _status_line(out, "5.12", "free", None)
+    assert "[Enter] book" in line and "[q] quit" in line
+
+
+def test_a_long_occupant_name_is_clipped_not_left_to_wrap(tmp_path):
+    # Feedback: a long occupant name pushed the status line past the
+    # terminal width, so the terminal itself wrapped it onto a second row
+    # -- `_run_live`'s scroll/redraw math budgets exactly one row for this
+    # line, so the wrapped row wrote over the grid, making the map appear
+    # to jump up and down frame to frame. Clipping keeps it to exactly one
+    # row's worth of visible characters no matter how long the name is.
+    out = Output(today=dt.date(2026, 9, 1), stdout=io.StringIO(),
+                stderr=io.StringIO())
+    line = _status_line(out, "5.12", "booked", None,
+                        occupant="Christopher Alexandropoulos-Wintermantel",
+                        columns=60)
+    assert visible_len(line) <= 60
+    assert "…" in line
+    assert line.endswith("[q] quit")
+
+
+def test_a_long_occupant_name_never_overflows_at_any_width():
+    out = Output(today=dt.date(2026, 9, 1), stdout=io.StringIO(),
+                stderr=io.StringIO())
+    for columns in (20, 30, 40, 60, 80, 120):
+        line = _status_line(out, "5.12", "booked", None,
+                            occupant="A" * 100, columns=columns)
+        assert visible_len(line) <= columns
+
+
+def test_clipping_never_leaks_an_escape_code_with_colour_off():
+    # The clip can land mid-`out.fmt_desk`'s own colour codes -- a reset is
+    # needed there to keep it from bleeding into the hint, but ONLY when
+    # colour is actually on; a bare reset byte in --no-color/piped output
+    # would itself be the leak this is meant to avoid.
+    out = Output(today=dt.date(2026, 9, 1), stdout=io.StringIO(),
+                stderr=io.StringIO(), color=False)
+    line = _status_line(out, "5.12", "booked", None,
+                        occupant="A" * 100, columns=60)
+    assert "\x1b" not in line
+    assert len(line) <= 60          # no ANSI at all: visible == raw length
+
+
+def test_clip_visible_preserves_ansi_codes_verbatim():
+    coloured = "\x1b[1mHello\x1b[0m World"
+    assert _clip_visible(coloured, 5) == "\x1b[1mHello\x1b[0m"
+    assert visible_len(_clip_visible(coloured, 5)) == 5
+
+
+def test_right_justify_hint_hint_alone_too_wide_clips_the_hint():
+    out = Output(today=dt.date(2026, 9, 1), stdout=io.StringIO(),
+                stderr=io.StringIO())
+    line = _right_justify_hint(out, "x", "[a] one  [b] two  [c] three",
+                               columns=10)
+    assert visible_len(line) <= 9
 
 
 def test_run_live_n_advances_the_date_like_pgdn(tmp_path):

@@ -76,13 +76,9 @@ def _rank(key, groups):
 
 
 def resolve_group_keys(raw_keys, desk_keys, out):
-    """A config group's hand-typed entries -> real catalog keys, in order.
-
-    Config groups are hand-editable (PLAN.md), so a stale or mistyped entry
-    must not take the whole command down -- it's dropped with a warning
-    rather than raised, the same tolerance `config.office_day_indexes`
-    already gives a typo'd weekday. Shared by `fs book` and `fs at` rather
-    than each keeping its own copy (PLAN.md's "still open" duplication note).
+    """A config group's hand-typed entries -> real catalog keys, in
+    order. A stale or mistyped entry is dropped with a warning rather
+    than raised. Shared by `fs book` and `fs at`.
     """
     resolved = []
     for raw in raw_keys:

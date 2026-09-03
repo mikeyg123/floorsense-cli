@@ -51,22 +51,17 @@ class LoginRequired(FsError):
 
 
 class AuthFailed(FsError):
-    """Okta rejected the login. Distinct from LoginRequired because the
-    remedy differs: one needs a tap, the other needs a correct credential
-    -- or, for `LOCKED_OUT` (the one cause here that isn't a bad
-    credential -- see `InvalidCredentials`), an unlock the account owner
-    has to sort out with Okta, not a retyped password."""
+    """Okta rejected the login. Distinct from LoginRequired: one needs a
+    tap, the other a correct credential -- or, for `LOCKED_OUT`, an
+    unlock the account owner has to sort out with Okta."""
     code = ExitCode.AUTH_FAILED
 
 
 class InvalidCredentials(AuthFailed):
     """`AuthFailed` specifically because Okta rejected the password or
-    username itself (401 / `E0000004`) -- as opposed to `AuthFailed`'s
-    other cause, `LOCKED_OUT`, where the password may be perfectly fine.
-    Same exit code as `AuthFailed` (this IS one); the distinction exists
-    for `session.py`, which forgets a stored password on this specifically
-    and must NOT on a locked-out account, since the password there was
-    never the problem."""
+    username itself (401 / `E0000004`), not `LOCKED_OUT`. Distinguished
+    so `session.py` can forget a stored password on this and NOT on a
+    locked-out account, where the password was never the problem."""
 
 
 class CommError(FsError):

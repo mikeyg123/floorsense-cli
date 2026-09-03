@@ -8,7 +8,7 @@ import io
 import pytest
 
 from fs_cli.catalog import Desk, DeskState
-from fs_cli.commands.at_cmd import cmd_at
+from fs_cli.commands.at_cmd import cmd_at, occupant_name
 from fs_cli.errors import ExitCode, UsageError
 from fs_cli.render import Output
 
@@ -48,6 +48,12 @@ class FakeCatalog:
 
     def own_uid(self):
         return self._own_uid
+
+    def cached_user_name(self, uid):
+        return None
+
+    def remember_user_name(self, uid, name):
+        pass
 
 
 class FakeApi:
@@ -168,6 +174,62 @@ def test_occupant_lookup_is_not_repeated_for_the_same_uid():
     _, stdout, _ = run(catalog, api, Config(), Args(["L5.D.A", "L5.D.B", "mon"]))
     assert stdout.count("A Stranger") == 2
     assert api.user_calls == ["99"]
+
+
+# -- occupant_name: the persistent uid -> name cache ------------------------
+
+class _RecordingCatalog:
+    def __init__(self, cached=None):
+        self._cached = dict(cached or {})
+        self.remembered = {}
+
+    def cached_user_name(self, uid):
+        return self._cached.get(uid)
+
+    def remember_user_name(self, uid, name):
+        self.remembered[uid] = name
+
+
+def test_occupant_name_a_persistent_cache_hit_skips_the_api_call():
+    catalog = _RecordingCatalog(cached={"99": "A Stranger"})
+    api = FakeApi(users={"99": {"name": "Someone Else Entirely"}})
+    assert occupant_name(api, None, "99", None, {}, catalog) == "A Stranger"
+    assert api.user_calls == []
+
+
+def test_occupant_name_persists_a_freshly_resolved_name():
+    catalog = _RecordingCatalog()
+    api = FakeApi(users={"99": {"name": "A Stranger"}})
+    assert occupant_name(api, None, "99", None, {}, catalog) == "A Stranger"
+    assert catalog.remembered == {"99": "A Stranger"}
+
+
+def test_occupant_name_does_not_persist_the_api_failure_fallback():
+    # No entry for "99" -- `FakeApi.user` returns `{}`, so this falls back
+    # to the bare uid. That's not a real name, and caching it would block
+    # a future genuine lookup from ever succeeding.
+    catalog = _RecordingCatalog()
+    api = FakeApi(users={})
+    assert occupant_name(api, None, "99", None, {}, catalog) == "99"
+    assert catalog.remembered == {}
+
+
+def test_occupant_name_own_uid_never_touches_the_catalog_cache():
+    class _ExplodingCatalog:
+        def cached_user_name(self, uid):
+            raise AssertionError("should never be consulted for 'you'")
+
+        def remember_user_name(self, uid, name):
+            raise AssertionError("should never be consulted for 'you'")
+    assert occupant_name(FakeApi(), "42", "42", None, {},
+                         _ExplodingCatalog()) == "you"
+
+
+def test_occupant_name_works_with_no_catalog_at_all():
+    # `catalog=None` (the default) -- every call site written before this
+    # cache existed keeps working unchanged.
+    api = FakeApi(users={"99": {"name": "A Stranger"}})
+    assert occupant_name(api, None, "99", None, {}) == "A Stranger"
 
 
 def test_a_desk_target_defaults_to_today():

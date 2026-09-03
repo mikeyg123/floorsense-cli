@@ -1,28 +1,20 @@
 """`FixtureApi` -- the same endpoint surface, served from Phase 0 captures.
 
-This is what the test suite runs against, and what `tests/live_write_api.py`'s
-`LiveWriteApi` wraps for `fs map`'s live-write tests -- real, captured
-responses instead of hand-written stubs. That is deliberate: a stub written
-to satisfy tests drifts from the server it stands in for and stops being
-evidence of anything; a recording of the real server, replayed, keeps the
-suite an honest check against the actual floor.
+Real, captured responses instead of hand-written stubs -- a stub drifts
+from the server it stands in for; a recording, replayed, keeps the suite
+an honest check against the actual floor.
 
-**Matching is driven by each fixture's own `request` block, not a filename
-map.** 07 writes `{"request": {"method", "path", "params", "body"}}` into
-every capture, so the index is derived from the recordings themselves and a
-re-run of 07 cannot silently desync it. A filename map is a second copy of
-that information, and second copies rot.
+**Matching is driven by each fixture's own `request` block, not a
+filename map** -- the index is derived from the recordings themselves,
+so a re-capture can't silently desync it.
 
-Parameters split into two kinds, which is the only subtle part:
+Parameters split into two kinds:
 
-  * **discriminating** -- `planid`, `groupid`, `bktype`: different values
-    mean genuinely different responses, so they must match.
-  * **volatile** -- `date`, `start`, `finish`, `days`, `tz`: these were
-    whatever the capture day happened to be. Requiring them to match would
-    make every fixture unusable the day after it was recorded, so they are
-    ignored for matching. A test asking about next Tuesday gets the floor
-    as it was on capture day, which is exactly the fidelity these captures
-    were made to provide.
+  * **discriminating** -- `planid`, `groupid`, `bktype`: different
+    values mean genuinely different responses, so they must match.
+  * **volatile** -- `date`, `start`, `finish`, `days`, `tz`: whatever
+    the capture day happened to be. Ignored for matching, so a fixture
+    stays usable after the day it was recorded.
 """
 
 import json
@@ -50,17 +42,10 @@ def _key(method, path):
 
 
 def _window(params):
-    """`start`/`finish` are volatile as *values* but their WIDTH is not.
-
-    §5.2 records this as a correction the manual had to make: `user-search`'s
-    `future[]` is bounded by the window, so the one-day capture legitimately
-    returned no upcoming bookings and the 14-day one returned three. Treating
-    the whole window as volatile makes those two captures indistinguishable,
-    and the tie is resolved by glob order -- which silently picked the empty
-    one, reproducing the exact misreading §5.2 exists to correct.
-
-    So the width is bucketed and matched, while the absolute timestamps stay
-    ignored (they are still just "whenever the capture ran").
+    """`start`/`finish` are volatile as *values* but their WIDTH is not:
+    `user-search`'s `future[]` is bounded by the window (§5.2), so a
+    one-day capture and a 14-day capture legitimately differ. The width
+    is bucketed and matched; the absolute timestamps stay ignored.
     """
     start, finish = (params or {}).get("start"), (params or {}).get("finish")
     if not isinstance(start, int) or not isinstance(finish, int):
@@ -68,11 +53,8 @@ def _window(params):
     return "day" if finish - start <= ONE_DAY_S else "wide"
 
 
-#: Endpoints where the WIDTH of the requested window changes the answer, and
-#: so has to be matched. `floorplan-booking` is deliberately absent: it is
-#: always asked about a single day, and including it would mean a future
-#: multi-day request failing with "no fixture" rather than matching the
-#: day-shaped captures that would have answered it correctly.
+#: Endpoints where the WIDTH of the requested window changes the answer.
+#: `floorplan-booking` is deliberately absent -- it's always a single day.
 WINDOW_SENSITIVE = {"/app/user-search"}
 
 
@@ -87,13 +69,10 @@ def _discriminating(path, params):
 
 
 class FixtureApi(Api):
-    """Reads. Writes are refused rather than faked.
-
-    A fake write would have to invent a response, and this class exists to
-    answer from real captures, not invented ones -- see `live_write_api.py`
-    for the test double that DOES need to simulate a write's effect, and
-    why it wraps this class rather than replacing it. Reaching a write
-    here is a bug in the caller, and says so.
+    """Reads. Writes are refused rather than faked -- a fake write would
+    have to invent a response. See `live_write_api.py` for the test
+    double that DOES simulate a write's effect, wrapping this class
+    rather than replacing it. Reaching a write here is a bug, and says so.
     """
 
     def __init__(self, directory=None):
@@ -103,9 +82,8 @@ class FixtureApi(Api):
 
     def _load(self):
         if not self.directory.is_dir():
-            # Only reachable from a non-editable install, where the source
-            # tree (and so `tests/fixtures/`) isn't shipped. Say that,
-            # rather than reporting every endpoint as individually missing.
+            # Only reachable from a non-editable install, where the
+            # source tree isn't shipped. Say that, not "endpoint missing".
             raise CommError(
                 f"no fixtures at {self.directory}",
                 hint="FixtureApi reads the Phase 0 captures from the "
@@ -134,18 +112,16 @@ class FixtureApi(Api):
                 hint="Re-run experiments/07_capture_shapes.py to capture it.")
 
         wanted = _discriminating(_key(method, path)[1], params)
-        # Most specific first: a fixture that pins `planid` beats a bare one,
-        # so `floorplan-booking?planid=3` cannot be answered by planid 1's
-        # capture just because it was loaded earlier.
+        # Most specific first: a fixture pinning `planid` beats a bare
+        # one, so `floorplan-booking?planid=3` can't be answered by
+        # planid 1's capture just because it loaded first.
         ranked = sorted(candidates, key=lambda c: -len(c[0]))
         matches = [c for c in ranked
                    if all(wanted.get(k) == v for k, v in c[0].items())]
         if matches:
             best = [c for c in matches if len(c[0]) == len(matches[0][0])]
-            # An unresolved tie between DIFFERENT captures is an error, not a
-            # coin toss. Identical bodies (the 15d/30d summary pair, which the
-            # server capped to the same response) tie harmlessly, so only a
-            # genuine disagreement is worth stopping for.
+            # An unresolved tie between DIFFERENT captures is an error,
+            # not a coin toss -- identical bodies tie harmlessly.
             distinct = {json.dumps(c[1].get("body"), sort_keys=True)
                         for c in best}
             if len(distinct) > 1:
