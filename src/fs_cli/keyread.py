@@ -30,6 +30,8 @@ except ImportError:                      # pragma: no cover -- non-POSIX
     termios = None
     tty = None
 
+from . import keyread_windows
+
 __all__ = ["read_choice", "read_key", "capable"]
 
 #: How long to wait, after a lone `\x1b` byte, before deciding it really
@@ -95,9 +97,21 @@ def capable(stdin):
     """Whether `stdin` is a real, `termios`-manageable terminal fd -- the
     guard that keeps every non-interactive/test stdin on the plain
     `readline()` path. Public so `map_cmd.cmd_map`'s live/static branch
-    can reuse the exact same check."""
-    if termios is None or tty is None:
+    can reuse the exact same check.
+
+    No `termios` at all (Windows) delegates to `keyread_windows.capable`
+    instead of going straight to `False` -- its return is a bare `True`,
+    not an fd, so callers below branch on `termios is None` rather than
+    trusting this return value's type to tell POSIX and Windows apart.
+
+    `FS_NO_TTY` (any non-empty value) forces `False` unconditionally --
+    an escape hatch to exercise the plain `readline()` fallback (what
+    Windows takes today, and what any non-tty stdin takes) from a real,
+    otherwise-capable terminal, without faking a whole environment."""
+    if os.environ.get("FS_NO_TTY"):
         return False
+    if termios is None or tty is None:
+        return keyread_windows.capable(stdin)
     try:
         fd = stdin.fileno()
     except (AttributeError, OSError, ValueError):
@@ -130,6 +144,8 @@ def read_choice(stdin, out, immediate=()):
     if fd is False:
         line = stdin.readline()
         return None if line == "" else line.strip().lower()
+    if termios is None:
+        return keyread_windows.read_choice(out, immediate=immediate)
 
     old = termios.tcgetattr(fd)
     try:
@@ -217,6 +233,8 @@ def read_key(stdin):
         if text == "\x1b":
             return "esc"
         return text.lower()
+    if termios is None:
+        return keyread_windows.read_key()
 
     old = termios.tcgetattr(fd)
     try:

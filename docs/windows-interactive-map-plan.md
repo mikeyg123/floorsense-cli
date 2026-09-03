@@ -2,10 +2,12 @@
 
 ## Status
 
-Not started. `fs map` on Windows always falls back to the static (non-scrolling)
-view today -- by design, not by accident: `keyread.capable()` returns `False`
-unconditionally there (see below), so `_run_live` is never entered. This is a
-plan for actually implementing it, for whoever picks it up next.
+Option A implemented: `keyread_windows.py`, dispatched from `keyread.py`
+whenever `termios` isn't importable. Keyboard nav only, no mouse (see
+Option A below). Option B not attempted -- real Windows testing
+opportunity is limited, so the lower-risk path was taken; see Testing.
+`fs map`'s drawing side needed no changes, confirmed by the user:
+`cmd.exe`'s static fallback already renders colour correctly.
 
 ## Why it doesn't work today
 
@@ -70,11 +72,8 @@ Two separate things, often conflated:
 
 ### Recommendation
 
-Prototype Option B first, in `experiments/` (gitignored scratch space, this
-repo's existing convention -- see CLAUDE.md) against a real Windows Terminal
-session. If the raw-byte read doesn't come through clean, fall back to
-Option A: keyboard-only nav is still a real improvement over always-static,
-just missing mouse-click desk selection.
+Option A shipped (see Status). Option B remains the path to mouse support
+if a Windows box becomes available to prototype it against.
 
 ## Package size / architecture constraint
 
@@ -97,16 +96,19 @@ branch, they just hide it, usually at real dependency cost.
 
 ## Testing
 
-- Unit-testable without Windows: `keyread.capable()` already has coverage for
-  the non-tty fallback; add a test that monkeypatches
-  `keyread.termios = None` directly, pinning the exact condition Windows
-  hits (currently only exercised indirectly via a non-tty `StringIO`).
-- CI: add a `windows-latest` job to `.github/workflows/ci.yml`'s matrix
-  running the existing `pytest` suite -- confirms the package imports
-  cleanly and `fs map` falls back to static without crashing, on a real
-  Windows interpreter. Doesn't exercise the new interactive backend itself
-  (no real terminal on a CI runner).
-- Manual, on a real Windows machine, both terminals: `fs map` interactive
-  nav (arrow keys, Page Up/Down, mouse click-to-select if Option B lands),
-  and the static fallback's rendering (colour, box-drawing glyphs) in both
-  Windows Terminal and legacy `cmd.exe`/`conhost`.
+- Done: `tests/test_keyread_windows.py` drives `keyread_windows.py` against
+  a fake `msvcrt`; `tests/test_keyread_dispatch.py` monkeypatches
+  `keyread.termios = None` to pin the exact condition Windows hits and
+  confirms `keyread.py` delegates to it. Neither needs a real Windows box.
+- Not done, deliberately out of scope this pass: a `windows-latest` CI job.
+  `fs map`'s Windows path is unverified by CI, only by the unit tests above.
+- `FS_NO_TTY=1` forces `keyread.capable()` to `False` unconditionally --
+  lets the plain-`readline()` fallback (what every command takes on
+  Windows today, `fs map`'s static view included) be exercised by hand
+  from a real macOS/Linux terminal, without needing a non-tty stdin or an
+  actual Windows box.
+- Still needed, manual, on a real Windows machine (both terminals): `fs map`
+  interactive nav (arrow keys, Page Up/Down -- no mouse) and the static
+  fallback's rendering (colour, box-drawing glyphs) in Windows Terminal and
+  legacy `cmd.exe`/`conhost`. `cmd.exe` colour rendering for the static
+  view is already confirmed working by the user.

@@ -34,17 +34,12 @@ Windows via a bash-like shell (Git Bash/WSL/MSYS2).
 
 1. [Download `fs`](https://github.com/mikeyg123/floorsense-cli/releases/latest/download/fs),
    drop it somewhere on your `PATH` (e.g. `~/bin` or `/usr/local/bin`), and make it executable. 
-   Run directly from a shell — no install, no admin rights required. On Windows, run it from a
-   bash-like shell if you have one, or create a launcher that runs it as a
-   `python3` script in a terminal window.
-2. Make sure `python3` (3.11+) is on your `PATH` — `fs` is a self-contained
-   zipapp but still needs your system's Python.
-3. Run any command. The first run walks you through setup (Okta username +
-   MFA: tap "Yes, it's me" or select the correct number challenge). If your
-   workplace's Floorsense isn't at `https://my.floorsense.nz`, pass `--url`
-   — see `fs help` for the full info.
-4. Run `fs --version` any time to check which build you have — handy when
-   filing a bug report.
+   Run directly from a shell — no install, no admin rights required. 
+1. Make sure python3 (3.11+) is on your PATH — fs is a self-contained zipapp but still needs your system's Python.
+1. On Windows, run it from a bash-like shell if you have one, or create a launcher that runs it as a python3 script in a terminal window. 
+1. If you have ssl errors due to your corporate firewall then 'pip install pip-system-certs' will probably fix them.
+1. Run any command. The first run walks you through setup (Okta username + MFA: tap "Yes, It's Me" or select the correct number challenge).
+see fs help for the full info.
 
 ### Usage
 
