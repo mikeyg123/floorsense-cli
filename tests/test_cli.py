@@ -12,6 +12,7 @@ import os
 import pytest
 
 from fs_cli import auth
+from fs_cli import cli as cli_mod
 from fs_cli import config as config_mod
 from fs_cli.cli import (Context, main, make_password_provider,
                         split_argv, build_parser, first_run,
@@ -407,6 +408,38 @@ def test_url_matching_the_stored_one_by_case_only_is_not_a_change(cfgdir):
     # Unchanged: no forced first_run rewrote the identity.
     assert after.okta_user == "jamie.baker"
     assert after.floorsense_url == "https://other.example"
+
+
+def test_cache_is_scoped_to_a_non_default_floorsense_url(tmp_path,
+                                                          monkeypatch):
+    """`Context.cache` must not read/write the same `cache.json` a default-
+    origin run would -- desk identity is deployment-specific (see
+    `config.cache_filename`)."""
+    d = tmp_path / "fs"
+    config_mod.save(Config(okta_user="jamie.baker", email_domain="example.com",
+                          floorsense_url="https://other.example"), d)
+    captured = {}
+
+    class SpyCacheStore:
+        def __init__(self, path):
+            captured["path"] = path
+
+    monkeypatch.setattr(cli_mod, "CacheStore", SpyCacheStore)
+    main(["status"], directory=d)
+    assert captured["path"].name == "cache-other.example.json"
+
+
+def test_cache_is_the_bare_name_for_the_default_floorsense_url(cfgdir,
+                                                                monkeypatch):
+    captured = {}
+
+    class SpyCacheStore:
+        def __init__(self, path):
+            captured["path"] = path
+
+    monkeypatch.setattr(cli_mod, "CacheStore", SpyCacheStore)
+    main(["status"], directory=cfgdir)
+    assert captured["path"].name == "cache.json"
 
 
 def test_persist_identity_on_success_writes_the_new_url_and_password(tmp_path):

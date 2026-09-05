@@ -66,11 +66,15 @@ class Args:
 
 
 class FakeCatalog:
-    def __init__(self, tags=None):
+    def __init__(self, tags=None, desk_keys=()):
         self._tags = tags or {}
+        self._desk_keys = list(desk_keys)
 
     def tag_map(self):
         return dict(self._tags)
+
+    def desk_keys(self):
+        return list(self._desk_keys)
 
     def lockers(self):
         # An empty team (`names == []`) falls through `cmd_list`'s own-view
@@ -262,6 +266,18 @@ def test_an_all_flag_is_a_usage_error():
     # `--group`/`--all` are this file's since they're otherwise untested.
     with pytest.raises(UsageError):
         run(FakeApi(), Config(), Args([], all=True))
+
+
+def test_a_bare_desk_shaped_token_is_a_usage_error_not_a_silent_no_match():
+    # Regression: `resolve_targets` used to build its `Vocabulary` with no
+    # `desk_keys`, so a token shaped like a real desk key could never
+    # classify as DESK -- it fell through to NAME and silently became an
+    # always-empty `user_search` ("No matches.") instead of the same
+    # "looks like a desk, which this command doesn't take" `bind()` gives
+    # every other unaccepted token type.
+    catalog = FakeCatalog(desk_keys=["L5.D.235A"])
+    with pytest.raises(UsageError):
+        run(FakeApi(), Config(), Args(["5.235A"]), catalog=catalog)
 
 
 # -- --json: raw values, never the display strings --------------------------

@@ -1,6 +1,9 @@
-"""`fs map [<floor>] [<date>]` -- static per-floor ASCII/Unicode desk map,
-own-desk highlight, terminal-width crop, live per-desk status colour,
-arrow-key cursor navigation and book/release from the map.
+"""`fs map [<floor>] [<date>] [<name|team>]` -- static per-floor ASCII/
+Unicode desk map, own-desk highlight, terminal-width crop, live per-desk
+status colour, arrow-key cursor navigation and book/release from the map.
+An optional trailing name/team argument highlights matching occupied
+desks cyan (`resolve_match_uids`), on top of the existing yellow "yours"
+and purple `show_team_on_map` highlights.
 
 Everything but the per-workplace map data lives here rather than the
 thin-command-plus-top-level-module split other commands follow: nothing
@@ -21,6 +24,7 @@ import threading
 from .. import keyread
 from ..api import LiveApi, book_start_for
 from ..args import reject_forced
+from ..catalog import day_bounds
 from ..config import BOOKING_BLOCK_REASONS
 from ..dates import parse_date
 from ..desks import resolve_group_keys
@@ -100,27 +104,77 @@ HEADER_LINES = 1
 
 GLYPH_BY_KIND = {
     "free": "▢", "restricted": "■", "booked": "■", "yours": "▣", "team": "■",
+    "match": "■",
 }
 
 
 STYLE_METHOD_BY_KIND = {
     "free": "good", "restricted": "muted", "booked": "danger",
-    "yours": "attention", "team": "teammate",
+    "yours": "attention", "team": "teammate", "match": "matched",
 }
 
+#: `(glyph, Output colour method, label)` triples for the three legend
+#: entries that always mean the same thing -- the one place that knows
+#: what the map's colour key says for those, shared by `_run_static`'s
+#: own legend line and the live view's header-line legend
+#: (`_legend_text`) so the two can never drift apart in wording.
+#: `team`/`match` aren't here: their label is the actual configured
+#: `show_team_on_map` name / typed `fs map <name|team>` token, not a
+#: fixed word -- `_legend_text` builds those two itself.
+_LEGEND_BASE = (
+    ("▢", "good", "free"),
+    ("■", "danger", "unavailable"),
+)
+_LEGEND_YOURS = ("▣", "attention", "yours")
 
-def desk_glyph_kind(desk_key, highlight_keys, desk_states, team_uids=frozenset()):
-    """One desk's live-status glyph kind: "yours" beats "team" (occupied
-    by a `show_team_on_map` teammate) beats "free"/"restricted"/"booked"
-    from `desk_states`, or "free" uniformly when `desk_states` is `None`.
-    A key absent from a given `desk_states` defaults to "booked" -- the
-    conservative case, since a CLI that can't confirm bookability
-    shouldn't draw a desk as free.
 
-    `team_uids` needs no per-desk name lookup -- the occupant `uid` is
-    already in `desk_states` for the whole floor, so team highlighting
-    covers every desk from the first frame, not just wherever the cursor
-    has visited (unlike the status line's lazy occupant-name fetch).
+def _legend_text(out, sep="   ", team_label=None, match_label=None):
+    """`▢ free   ■ unavailable   ■ <team_label>   ■ <match_label>   ▣
+    yours` -- `team_label`/`match_label` name the real
+    `show_team_on_map` team and the real typed match target, not the
+    generic words "team"/"match", and each is omitted entirely when
+    there's nothing configured/typed for it to mean (`None` or blank).
+
+    When both are given and equal (case/whitespace-insensitively), only
+    `match_label` is shown -- the same name resolves to the exact same
+    uid set for both (`resolve_team_uids`/`resolve_match_uids` both
+    reach `team_cmd.resolve_team_membership`), so `desk_glyph_kind`'s
+    own "match beats team" precedence means the "team" colour could
+    never actually appear for it; showing both would just be a
+    confusing duplicate.
+
+    `sep` is the gap between entries, tightened by the live view's
+    header line (shares the row with the floor/date text) versus
+    `_run_static`'s own dedicated legend line.
+    """
+    items = list(_LEGEND_BASE)
+    same_target = bool(team_label and match_label
+                       and team_label.strip().lower()
+                       == match_label.strip().lower())
+    if team_label and not same_target:
+        items.append(("■", "teammate", team_label))
+    if match_label:
+        items.append(("■", "matched", match_label))
+    items.append(_LEGEND_YOURS)
+    return sep.join(f"{getattr(out, method)(glyph)} {label}"
+                    for glyph, method, label in items)
+
+
+def desk_glyph_kind(desk_key, highlight_keys, desk_states, team_uids=frozenset(),
+                    match_uids=frozenset()):
+    """One desk's live-status glyph kind: "yours" beats "match" (the typed
+    `fs map <name|team>` target) beats "team" (a `show_team_on_map`
+    teammate) beats "free"/"restricted"/"booked" from `desk_states`, or
+    "free" uniformly when `desk_states` is `None`. A key absent from a
+    given `desk_states` defaults to "booked" -- the conservative case,
+    since a CLI that can't confirm bookability shouldn't draw a desk as
+    free.
+
+    `team_uids`/`match_uids` need no per-desk name lookup -- the occupant
+    `uid` is already in `desk_states` for the whole floor, so both
+    highlights cover every desk from the first frame, not just wherever
+    the cursor has visited (unlike the status line's lazy occupant-name
+    fetch).
     """
     if desk_key in highlight_keys:
         return "yours"
@@ -128,6 +182,8 @@ def desk_glyph_kind(desk_key, highlight_keys, desk_states, team_uids=frozenset()
         return "free"
     state = desk_states.get(desk_key)
     if state is None or not state.free:
+        if match_uids and state is not None and state.uid in match_uids:
+            return "match"
         if team_uids and state is not None and state.uid in team_uids:
             return "team"
         return "booked"
@@ -284,14 +340,14 @@ def _zone_name(planid, cx_frac, cy_frac):
 
 def render_floor(planid, polys, catalog_keys, img_w, img_h,
                   highlight_keys=frozenset(), desk_states=None,
-                  team_uids=frozenset()):
+                  team_uids=frozenset(), match_uids=frozenset()):
     """Render one floor's desks, walls, partitions, room boxes and zone
     labels into a character grid. See docs/floorplan-map-manual.md for
     the wrong-turn/fix pairs this approach depends on. `highlight_keys`
-    marks the caller's own desk(s); `desk_states`/`team_uids` decide each
-    other desk's glyph via `desk_glyph_kind`/`GLYPH_BY_KIND`. Stays
-    colour-blind -- picks a glyph, never an ANSI code; `cmd_map` turns
-    the returned "kind" into an `Output` colour method.
+    marks the caller's own desk(s); `desk_states`/`team_uids`/`match_uids`
+    decide each other desk's glyph via `desk_glyph_kind`/`GLYPH_BY_KIND`.
+    Stays colour-blind -- picks a glyph, never an ANSI code; `cmd_map`
+    turns the returned "kind" into an `Output` colour method.
 
     Returns `(grid, highlight_positions, desk_kind_positions,
     desk_positions)`: `highlight_positions` is just the "yours" cells
@@ -378,7 +434,7 @@ def render_floor(planid, polys, catalog_keys, img_w, img_h,
             c = anchor_col + col_rank[m] * pitch_col
             if 0 <= r < n_rows and 0 <= c < n_cols:
                 kind = desk_glyph_kind(m, highlight_keys, desk_states,
-                                       team_uids)
+                                       team_uids, match_uids)
                 grid[r][c] = GLYPH_BY_KIND[kind]
                 desk_kind_positions[(r, c)] = kind
                 desk_positions[m] = (r, c)
@@ -540,12 +596,30 @@ def scroll_window(prev, pos, n_total, terminal_size, margin=SCROLL_MARGIN):
     return (left, right)
 
 
-def header_line(out, planid, target_date, names):
+def header_line(out, planid, target_date, names, columns=None,
+                team_label=None, match_label=None):
     """`Level 5 -- Wed 27 Aug`, the live view's first line. `names` (a
     `floor_names()` result) supplies the label; falls back to the bare
-    planid if it's ever missing rather than raising."""
+    planid if it's ever missing rather than raising.
+
+    `columns`, when given, right-justifies the colour-key legend
+    (`_legend_text`, with `team_label`/`match_label` passed straight
+    through) onto this same line via `_right_justify_hint` -- the live
+    view's own way to fit a legend in without spending a whole extra row
+    on it; a long floor/date label clips before the legend ever would,
+    same "protect the right-hand hint" rule the status line already
+    follows. `columns=None` (every direct/test call, and `_run_static`'s
+    separate dedicated legend line) returns just the plain floor/date
+    text, unchanged.
+    """
     level = names.get(planid, f"planid {planid}")
-    return f"{level} -- {out.fmt_date(target_date)}"
+    left = f"{level} -- {out.fmt_date(target_date)}"
+    if columns is None:
+        return left
+    return _right_justify_hint(
+        out, left, _legend_text(out, sep="  ", team_label=team_label,
+                                match_label=match_label),
+        columns)
 
 
 def desk_at_click(term_col, term_row, left, pos_to_key,
@@ -680,13 +754,44 @@ def resolve_team_uids(ctx):
     return frozenset(uid for uid, _ in current if uid)
 
 
+def resolve_match_uids(ctx, token, target_date):
+    """The uid set behind `fs map`'s optional trailing name/team token, or
+    `frozenset()` if none was given. A token matching a configured team
+    (or `following`) resolves like `resolve_team_uids`, current members
+    from `resolve_team_membership`. Anything else is a `user_search` name
+    match -- every fuzzy hit, exactly like `find_cmd._search_rows` --
+    scoped to `target_date` since that's the only day being drawn.
+    Lookup failures are swallowed the same way `resolve_team_uids`
+    swallows them; this only decides a highlight colour.
+    """
+    if not token or not token.strip():
+        return frozenset()
+    lname = token.strip().lower()
+    team = next((t for t in ctx.config.teams if t.lower() == lname), None)
+    if lname == FOLLOWING or team is not None:
+        try:
+            current, _, _ = resolve_team_membership(ctx, team or FOLLOWING)
+        except Exception:                         # noqa: BLE001
+            return frozenset()
+        return frozenset(uid for uid, _ in current if uid)
+    start, finish = day_bounds(target_date)
+    try:
+        hits = ctx.api.user_search(token, start, finish)
+    except Exception:                             # noqa: BLE001
+        return frozenset()
+    return frozenset(str(h["uid"]) for h in hits
+                     if isinstance(h, dict) and h.get("uid"))
+
+
 def cmd_map(ctx, stdin=None):
-    """`fs map [<floor>] [<date>]` -- see the module docstring.
+    """`fs map [<floor>] [<date>] [<name|team>]` -- see the module docstring.
 
     Cost: cold cache is up to 3 cached `floorplan_booking` calls
     (`catalog.desks()` x2 + `deskpolys()`), cached 30 days. Own-bookings
     and `availability()` are uncached every run regardless (permission-
-    sensitive). Worst case: 5 calls. Warm cache: 2.
+    sensitive). Worst case: 5 calls, +1 more (`user-search` or
+    `booking-summary`) when a `<name|team>` argument is given. Warm
+    cache: 2 (+1).
     """
     out, api, catalog = ctx.out, ctx.api, ctx.catalog
 
@@ -697,10 +802,11 @@ def cmd_map(ctx, stdin=None):
     reject_forced(ctx.args, "fs map")
 
     tokens = list(ctx.args.args)
-    if len(tokens) > 2:
+    if len(tokens) > 3:
         raise UsageError(
-            "fs map takes at most a floor and a date",
-            hint="e.g. `fs map`, `fs map mon`, `fs map 6`, `fs map 6 mon`.")
+            "fs map takes at most a floor, a date, and a name or team",
+            hint="e.g. `fs map`, `fs map mon`, `fs map 6`, `fs map 6 mon`, "
+                 "`fs map inception mon`.")
 
     # A cold cache can take a perceptible moment with nothing on screen --
     # printed before token classification since that also needs
@@ -709,6 +815,7 @@ def cmd_map(ctx, stdin=None):
 
     explicit_planid = None
     explicit_date = None
+    match_token = None
     if tokens:
         # Guarded on `tokens` so bare `fs map` skips a derivation it has
         # nothing to classify.
@@ -717,10 +824,16 @@ def cmd_map(ctx, stdin=None):
         for token in tokens:
             classified = classify_token(token, out.today, aliases)
             if classified is None:
-                raise UsageError(
-                    f"fs map doesn't understand {token!r}",
-                    hint=(f"A floor ({', '.join(sorted(names.values()))}) "
-                         "or a date." if names else "A floor or a date."))
+                # Neither a floor nor a date -- the one non-floor,
+                # non-date token allowed is a name/team match target.
+                if match_token is not None:
+                    raise UsageError(
+                        "fs map only takes one name or team",
+                        hint=f"Already have {match_token!r}; got {token!r} "
+                             "too. A multi-word name needs quoting: "
+                             '`fs map "jane doe"`.')
+                match_token = token
+                continue
             kind, value = classified
             if kind == "date":
                 if explicit_date is not None:
@@ -749,11 +862,26 @@ def cmd_map(ctx, stdin=None):
 
     desk_states = catalog.availability(target_date, planids=[planid])
     team_uids = resolve_team_uids(ctx)
+    match_uids = resolve_match_uids(ctx, match_token, target_date)
+    if match_token is not None and not match_uids:
+        out.warn(f"no match for {match_token!r}")
+    # For the legend, not the highlight itself -- the real configured
+    # name / typed token, shown once, so it stays stable across a live
+    # session's floor/date switches rather than flickering with whatever
+    # happens to be visible on any one frame.
+    team_label = (ctx.config.show_team_on_map or "").strip() or None
+    match_label = (match_token or "").strip() or None
 
     grid, highlight_positions, desk_kind_positions, desk_positions = render_floor(
         planid, polys, catalog_keys, img_w, img_h,
         highlight_keys=highlight_keys, desk_states=desk_states,
-        team_uids=team_uids)
+        team_uids=team_uids, match_uids=match_uids)
+    if (match_token is not None and match_uids
+            and "match" not in desk_kind_positions.values()):
+        # A real match, just not seated on THIS floor/date -- distinct
+        # from the no-hits-at-all warning above.
+        out.warn(f"{match_token!r} matches nobody on this floor for "
+                f"{out.fmt_date(target_date)}")
 
     columns, rows = terminal_size(sys.stdout)
     stdin = stdin if stdin is not None else sys.stdin
@@ -771,10 +899,12 @@ def cmd_map(ctx, stdin=None):
                          desk_kind_positions, desk_positions, columns,
                          stdin=stdin, desk_states=desk_states,
                          group_keys=group_keys, rows=rows,
-                         team_uids=team_uids,
-                         term_size=lambda: terminal_size(sys.stdout))
+                         team_uids=team_uids, match_uids=match_uids,
+                         term_size=lambda: terminal_size(sys.stdout),
+                         team_label=team_label, match_label=match_label)
     return _run_static(out, grid, highlight_positions, desk_kind_positions,
-                       columns)
+                       columns, team_label=team_label,
+                       match_label=match_label)
 
 
 def _render_lines(out, grid, desk_kind_positions, left, right,
@@ -811,17 +941,25 @@ def _render_lines(out, grid, desk_kind_positions, left, right,
     return lines
 
 
-def _run_static(out, grid, highlight_positions, desk_kind_positions, columns):
+def _run_static(out, grid, highlight_positions, desk_kind_positions, columns,
+                team_label=None, match_label=None):
     """One crop, one print, one legend line, exit -- what every
-    non-capable terminal (and `--no-nav`) gets."""
+    non-capable terminal (and `--no-nav`) gets. `team_label`/
+    `match_label` are `cmd_map`'s real `show_team_on_map` name / typed
+    match target, passed straight through to `_legend_text`."""
     n_cols = len(grid[0]) if grid else 0
-    highlight_cols = {c for _r, c in highlight_positions}
+    # Anchor the crop on "match" cells too, not just "yours" --
+    # `render_floor`'s `highlight_positions` is deliberately "yours"-only
+    # (see its docstring), so a `fs map <name>` hit with no own booking
+    # would otherwise crop to column 0 and draw nothing visible.
+    match_cols = {pos[1] for pos, kind in desk_kind_positions.items()
+                 if kind == "match"}
+    highlight_cols = {c for _r, c in highlight_positions} | match_cols
     window = crop_window(n_cols, highlight_cols, columns)
     left, right = window if window else (0, n_cols)
 
     out.print("\n".join(_render_lines(out, grid, desk_kind_positions, left, right)))
-    out.print(f"{out.good('▢')} free   {out.danger('■')} unavailable   "
-              f"{out.teammate('■')} team   {out.attention('▣')} yours")
+    out.print(_legend_text(out, team_label=team_label, match_label=match_label))
     return ExitCode.OK
 
 
@@ -830,6 +968,9 @@ def _initial_cursor_key(grid, desk_positions, desk_kind_positions,
     """Where the cursor starts, in order:
 
       1. The first (lowest-sorting) `"yours"` desk key, if any.
+      1.5. Failing that, the first `"match"` desk key -- a `fs map
+         <name|team>` hit is exactly what the user asked to land on, and
+         it puts the status line's occupant name on screen immediately.
       2. Failing that, the first `group_keys` desk that's on this floor
          and currently free -- starting on a desk you can't book is more
          confusing than starting somewhere plain.
@@ -840,6 +981,11 @@ def _initial_cursor_key(grid, desk_positions, desk_kind_positions,
                  if desk_kind_positions.get(pos) == "yours"]
     if yours_keys:
         return min(yours_keys)
+
+    match_keys = [key for key, pos in desk_positions.items()
+                 if desk_kind_positions.get(pos) == "match"]
+    if match_keys:
+        return min(match_keys)
 
     for key in group_keys:
         pos = desk_positions.get(key)
@@ -859,10 +1005,37 @@ def _initial_cursor_key(grid, desk_positions, desk_kind_positions,
 
 
 #: The move/day/floor/quit keys, shared by every `_status_line` branch.
-#: Floor keys are hardcoded to `5`/`6` (digit-key switching can only
-#: reach a floor whose alias is a single bare digit) -- accurate for
-#: this workplace's two floors, may not match a different building's.
+#: This is only the FALLBACK used when no `floor_tokens` are available
+#: (a direct/test call to `_status_line`) -- `_run_live` always passes
+#: its own `nav_hint`, built by `_floor_switch_hint`/`_nav_hint_for` from
+#: the actual floors on offer, not this hardcoded `5`/`6`.
 _NAV_HINT = "[↑↓←→] move  [n/p] day  [5/6] floor  [q] quit"
+
+
+def _floor_switch_hint(floor_tokens):
+    """The `[5/6] floor` nav-hint segment (trailing double space, or `""`),
+    built from the floors this live view can actually reach with a
+    single keypress -- every `floor_aliases()` token exactly one
+    character long (in practice always a digit; see that function's
+    docstring), sorted for a stable display order. `""` when fewer than
+    two exist: nothing worth advertising with zero or one reachable
+    floor.
+    """
+    keys = sorted(k for k in floor_tokens if len(k) == 1)
+    if len(keys) < 2:
+        return ""
+    return f"[{'/'.join(keys)}] floor  "
+
+
+def _nav_hint_for(floor_tokens):
+    """`_status_line`'s real keyboard-hint text, built once per
+    `_run_live` call (`floor_tokens` is fixed for the life of that
+    call) -- so a workplace with more, fewer, or differently-named
+    floors than this one's `5`/`6` still gets an accurate floor-switch
+    hint instead of `_NAV_HINT`'s hardcoded one.
+    """
+    return (f"[↑↓←→] move  [n/p] day  {_floor_switch_hint(floor_tokens)}"
+            f"[q] quit")
 
 #: Splits on an SGR colour code while keeping it in the result, so
 #: `_clip_visible` below can pass every code through untouched regardless
@@ -924,23 +1097,27 @@ def _right_justify_hint(out, left, hint, columns):
     return f"{_clip_visible(left, budget - 1)}…{reset} {hint}"
 
 
-def _status_line(out, cursor_key, kind, message, occupant=None, columns=None):
-    """`occupant`, when given, names who has a "booked" or "team" desk
-    (just the name, not "booked by X" -- the glyph already says that). No
-    `occupant` yet (fetch in flight) falls back to plain "unavailable" for
-    both kinds. `columns` right-justifies the keyboard hints (see
-    `_right_justify_hint`); `None` falls back to plain concatenation."""
+def _status_line(out, cursor_key, kind, message, occupant=None, columns=None,
+                 nav_hint=_NAV_HINT):
+    """`occupant`, when given, names who has a "booked", "team" or "match"
+    desk (just the name, not "booked by X" -- the glyph already says
+    that). No `occupant` yet (fetch in flight) falls back to plain
+    "unavailable" for all three kinds. `columns` right-justifies the
+    keyboard hints (see `_right_justify_hint`); `None` falls back to
+    plain concatenation. `nav_hint` is `_run_live`'s per-session hint
+    (`_nav_hint_for`) -- the `_NAV_HINT` default is only for a direct/
+    test call with no real floor list to build one from."""
     if message is not None:
         return message
     label = out.fmt_desk(cursor_key)
     if kind == "yours":
-        left, hint = f"{label} yours", f"[Enter] release  {_NAV_HINT}"
+        left, hint = f"{label} yours", f"[Enter] release  {nav_hint}"
     elif kind == "free":
-        left, hint = f"{label} free", f"[Enter] book  {_NAV_HINT}"
-    elif kind in ("booked", "team") and occupant:
-        left, hint = f"{label} -- {occupant}", _NAV_HINT
+        left, hint = f"{label} free", f"[Enter] book  {nav_hint}"
+    elif kind in ("booked", "team", "match") and occupant:
+        left, hint = f"{label} -- {occupant}", nav_hint
     else:
-        left, hint = f"{label} unavailable", _NAV_HINT
+        left, hint = f"{label} unavailable", nav_hint
     return _right_justify_hint(out, left, hint, columns)
 
 
@@ -992,13 +1169,15 @@ def _do_write(ctx, action, bkid, key, planid, target_date, book_day_start):
         return False, text
 
 
-def _refresh(ctx, planid, target_date, team_uids=frozenset()):
+def _refresh(ctx, planid, target_date, team_uids=frozenset(),
+            match_uids=frozenset()):
     """Re-fetch own bookings and live availability after a successful
     write, and re-render. Returns `(grid, highlight_positions,
     desk_kind_positions, desk_positions, bookings, desk_states)`; the
     caller keeps `cursor_key` and re-resolves it against the new
-    `desk_positions`. `team_uids` is passed through, not re-resolved --
-    `_run_live` resolves it once on the way in, same as `group_keys`."""
+    `desk_positions`. `team_uids`/`match_uids` are passed through, not
+    re-resolved -- `_run_live` resolves them once on the way in, same as
+    `group_keys`."""
     out, api, catalog = ctx.out, ctx.api, ctx.catalog
     bookings = own_bookings(api, out.today)
     covering_keys = _covering_desk_keys(bookings, target_date)
@@ -1011,7 +1190,7 @@ def _refresh(ctx, planid, target_date, team_uids=frozenset()):
     grid, highlight_positions, desk_kind_positions, desk_positions = \
         render_floor(planid, polys, catalog_keys, img_w, img_h,
                     highlight_keys=highlight_keys, desk_states=desk_states,
-                    team_uids=team_uids)
+                    team_uids=team_uids, match_uids=match_uids)
     return (grid, highlight_positions, desk_kind_positions, desk_positions,
            bookings, desk_states)
 
@@ -1025,10 +1204,10 @@ def _spawn_thread(target, args):
 
 def _fetch_occupant_if_needed(api, own_uid, desk_states, key, kind,
                               names, pending, spawn, catalog=None):
-    """Kick off (never block on) the one `/user` lookup a "booked" or
-    "team" desk's status line wants. `names` is the `uid -> display name`
-    cache `_status_line` reads from; `pending` is the uids already in
-    flight, so re-visiting the same desk twice doesn't stack duplicate
+    """Kick off (never block on) the one `/user` lookup a "booked", "team"
+    or "match" desk's status line wants. `names` is the `uid -> display
+    name` cache `_status_line` reads from; `pending` is the uids already
+    in flight, so re-visiting the same desk twice doesn't stack duplicate
     lookups. `desk_states=None` (feature not opted into) is a no-op.
 
     `catalog`, when given, is checked synchronously first -- a local
@@ -1036,7 +1215,7 @@ def _fetch_occupant_if_needed(api, own_uid, desk_states, key, kind,
     `names` in time for the frame about to draw. Only a genuine miss
     falls through to the background `/user` fetch.
     """
-    if desk_states is None or kind not in ("booked", "team"):
+    if desk_states is None or kind not in ("booked", "team", "match"):
         return
     state = desk_states.get(key)
     uid = state.uid if state is not None else None
@@ -1103,7 +1282,8 @@ def _run_live(ctx, planid, target_date, grid, highlight_positions,
               desk_kind_positions, desk_positions, columns,
               stdin=None, read_key=None, initial_cursor_key=None,
               desk_states=None, spawn=None, group_keys=(), rows=None,
-              team_uids=frozenset(), term_size=None):
+              team_uids=frozenset(), match_uids=frozenset(), term_size=None,
+              team_label=None, match_label=None):
     """The redraw loop behind arrow-key navigation and book/release from
     `fs map`'s live view. Kept thin: which desk an arrow lands on, what
     Enter means, is delegated to `nearest_desk`/`plan_for_cursor` -- this
@@ -1138,6 +1318,10 @@ def _run_live(ctx, planid, target_date, grid, highlight_positions,
     A `("mouse", button, col, row, pressed)` key moves the cursor to the
     desk under a qualifying left-button press via `desk_at_click`;
     anything else is a no-op.
+
+    `team_label`/`match_label` are `cmd_map`'s real `show_team_on_map`
+    name / typed match target -- passed through to `header_line`'s
+    embedded legend on every frame, never re-derived here.
     """
     out, api, catalog = ctx.out, ctx.api, ctx.catalog
     bg_api = _occupant_api(ctx)
@@ -1154,6 +1338,11 @@ def _run_live(ctx, planid, target_date, grid, highlight_positions,
     # this independently correct for tests calling it directly.
     floor_labels = floor_names(catalog)
     floor_tokens = floor_aliases(floor_labels)
+    # Built once, not per frame: `floor_tokens` is fixed for the life of
+    # this call, and it's what makes the status line's floor-switch hint
+    # match the actual floors on offer instead of `_NAV_HINT`'s hardcoded
+    # `5`/`6`.
+    nav_hint = _nav_hint_for(floor_tokens)
     book_day_start = catalog.book_day_start_mins()
     bookings = own_bookings(api, out.today)
     try:
@@ -1202,7 +1391,9 @@ def _run_live(ctx, planid, target_date, grid, highlight_positions,
                                 cursor_key, cursor_pos, names, pending, spawn,
                                 catalog)
 
-            lines = [header_line(out, planid, target_date, floor_labels)]
+            lines = [header_line(out, planid, target_date, floor_labels,
+                                 columns, team_label=team_label,
+                                 match_label=match_label)]
             lines += _render_lines(out, grid, desk_kind_positions, left, right,
                                    cursor_pos=cursor_pos, top=top, bottom=bottom)
             if confirming is not None:
@@ -1213,7 +1404,8 @@ def _run_live(ctx, planid, target_date, grid, highlight_positions,
                 state = desk_states.get(cursor_key) if desk_states else None
                 occupant = names.get(state.uid) if state else None
                 lines.append(_status_line(out, cursor_key, kind, message,
-                                          occupant, columns))
+                                          occupant, columns,
+                                          nav_hint=nav_hint))
             message = None
             last_lines = lines
 
@@ -1236,7 +1428,7 @@ def _run_live(ctx, planid, target_date, grid, highlight_positions,
                 if wrote:
                     (grid, highlight_positions, desk_kind_positions,
                      desk_positions, bookings, desk_states) = _refresh(
-                        ctx, planid, target_date, team_uids)
+                        ctx, planid, target_date, team_uids, match_uids)
                 continue
 
             if key in ("up", "down", "left", "right"):
@@ -1258,7 +1450,7 @@ def _run_live(ctx, planid, target_date, grid, highlight_positions,
                     if wrote:
                         (grid, highlight_positions, desk_kind_positions,
                          desk_positions, bookings, desk_states) = _refresh(
-                            ctx, planid, target_date, team_uids)
+                            ctx, planid, target_date, team_uids, match_uids)
                 else:
                     confirming = (action, bkid)
                 continue
@@ -1275,7 +1467,7 @@ def _run_live(ctx, planid, target_date, grid, highlight_positions,
                     out.prompt("\x1b[J")
                     (grid, highlight_positions, desk_kind_positions,
                      desk_positions, bookings, desk_states) = _refresh(
-                        ctx, planid, target_date, team_uids)
+                        ctx, planid, target_date, team_uids, match_uids)
                     cursor_key = _initial_cursor_key(
                         grid, desk_positions, desk_kind_positions,
                         highlight_positions, columns, group_keys=group_keys)
@@ -1293,7 +1485,7 @@ def _run_live(ctx, planid, target_date, grid, highlight_positions,
                 target_date = new_date
                 (grid, highlight_positions, desk_kind_positions,
                  desk_positions, bookings, desk_states) = _refresh(
-                    ctx, planid, target_date, team_uids)
+                    ctx, planid, target_date, team_uids, match_uids)
                 # Floor unchanged, so `desk_positions` is the same layout
                 # -- keep the cursor on the same desk, only re-pick if it
                 # genuinely isn't there any more (defensive).

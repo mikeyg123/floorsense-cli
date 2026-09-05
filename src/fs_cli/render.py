@@ -30,7 +30,8 @@ __all__ = ["Output", "table", "supports_color", "visible_len"]
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 _ANSI = {"bold": "1", "dim": "2", "reverse": "7", "blink": "5", "red": "31",
-         "green": "32", "yellow": "33", "blue": "34", "magenta": "35"}
+         "green": "32", "yellow": "33", "blue": "34", "magenta": "35",
+         "cyan": "36"}
 
 #: Meaning -> `_ANSI` key. The one place that decides what colour a *kind*
 #: of thing gets -- every command reaches colour through `Output`'s
@@ -45,6 +46,8 @@ _ANSI = {"bold": "1", "dim": "2", "reverse": "7", "blink": "5", "red": "31",
 #:   teammate   -- `fs map`'s occupied-desk highlight for a
 #:                 `show_team_on_map` teammate -- ANSI colour 5 (magenta),
 #:                 chosen over a 256-colour orange for portability.
+#:   match      -- `fs map <name|team>`'s occupied-desk highlight for the
+#:                 typed target -- takes precedence over `teammate`.
 THEME = {
     "identifier": "bold",
     "label": "dim",
@@ -53,6 +56,7 @@ THEME = {
     "attention": "yellow",
     "danger": "red",
     "teammate": "magenta",
+    "match": "cyan",
 }
 
 
@@ -248,6 +252,9 @@ class Output:
 
     def teammate(self, text):
         return self.style("teammate", text)
+
+    def matched(self, text):
+        return self.style("match", text)
 
     # -- writing ------------------------------------------------------------
 

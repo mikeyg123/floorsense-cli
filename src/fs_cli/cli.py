@@ -309,7 +309,7 @@ _CommandHelp = namedtuple("_CommandHelp", "usage summary detail")
 COMMAND_HELP = {
     "status": _CommandHelp(
         "fs status",
-        "Identity and session validity. No side effects, and never logs in.",
+        "Identity and session validity. Never logs in or touches the API.",
         """\
 fs status
 
@@ -318,8 +318,11 @@ fs status
     whether the current session is live, your configured office days,
     book_ahead_days, default_group, and your configured desk groups.
 
-    Read-only. Takes no parameters -- passing --date/--desk/--name/
-    --group/--all is a usage error, not a silent no-op."""),
+    Read-only -- no changes other than fixing config.toml itself
+    (permissions, or backfilling a setting missing from an older
+    config.toml). Never touches session.json/cache.json or the API.
+    Takes no parameters -- passing --date/--desk/--name/--group/--all is
+    a usage error, not a silent no-op."""),
     "list": _CommandHelp(
         "fs list [<name|team>...] [<date>...]  (aliases: fs ls, fs find)",
         "Your locker and bookings from today forward, or someone else's.",
@@ -433,10 +436,10 @@ fs at <desk|group> [<date>...]
     Shows whoever's booked at each desk, anyone at all, not only
     people you follow (unlike `fs list`'s 'following'). Read-only."""),
     "map": _CommandHelp(
-        "fs map [<floor>] [<date>]",
+        "fs map [<floor>] [<date>] [<name|team>]",
         "Show a floor's desk layout. Read-only.",
         """\
-fs map [<floor>] [<date>]
+fs map [<floor>] [<date>] [<name|team>]
 
     No args
         Your floor, today -- cropped and highlighted around your own
@@ -453,6 +456,16 @@ fs map [<floor>] [<date>]
     <floor> and <date>, either order
         That floor for that date, highlighted if you have a booking
         there covering that date.
+
+    <name|team>, any order alongside <floor>/<date>
+        Highlights matching occupied desks cyan: a configured team name
+        (or `following`) highlights its current members; anything else
+        is a name search, every fuzzy match highlighted (e.g. `fs map
+        inception mon`, `fs map mike`). Takes precedence over the
+        `show_team_on_map` purple highlight, which in turn loses to your
+        own desk's yellow. A name that itself reads as a date or floor
+        (`mon`, `6`) is taken as that instead -- same precedence as
+        every other free-order `fs` command.
 
     Never wraps -- the map is cropped to the terminal width. Does not
     support --json: there is no structured equivalent of an ASCII map."""),
@@ -822,7 +835,9 @@ def main(argv=None, directory=None):
             raise UsageError(f"unknown command {args.command!r}",
                              hint=f"Try one of: {', '.join(COMMANDS)}, help.")
         code = handler(Context(out, cfg, session, directory, args,
-                               cache=CacheStore(directory / "cache.json")))
+                               cache=CacheStore(
+                                   directory
+                                   / config_mod.cache_filename(origin))))
         # Backstop for commands (office-days, reset) that never log in.
         if args.save_password and not session.logged_in_this_run:
             out.warn("--save-password had nothing to confirm: `fs "

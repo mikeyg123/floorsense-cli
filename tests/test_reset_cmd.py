@@ -127,6 +127,22 @@ def test_default_leaves_config_toml_untouched(cfg_dir):
     assert reloaded.groups == {"favourite": ["217a"]}
 
 
+def test_clears_the_scoped_cache_for_a_non_default_url(cfg_dir):
+    # A `--url` session's cache lives at `cache-<host>.json` (see
+    # `config.cache_filename`) -- `fs reset` on that session must clear
+    # that file, not the unrelated default-origin `cache.json`.
+    _write(cfg_dir / "cache.json", {"desks": {"at": 1, "value": []}})
+    _write(cfg_dir / "cache-other.example.json",
+          {"desks": {"at": 1, "value": []}})
+    cfg = Config(okta_user="jane.doe", okta_org="acme.okta.com",
+                floorsense_url="https://other.example")
+    code, stdout, _ = run(cfg, Args(yes=True), cfg_dir)
+    assert code == ExitCode.OK
+    assert "cache-other.example.json" in stdout
+    assert not (cfg_dir / "cache-other.example.json").exists()
+    assert (cfg_dir / "cache.json").exists()   # untouched -- different origin
+
+
 def test_json_emits_what_was_cleared(cfg_dir):
     _write(cfg_dir / "session.json", {"created": 1, "cookies": {"id": "x"}})
     code, stdout, _ = run(Config(), Args(yes=True), cfg_dir, json_mode=True)

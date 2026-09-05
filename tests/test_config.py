@@ -10,9 +10,10 @@ import stat
 
 import pytest
 
+from fs_cli.auth import FLOORSENSE_ORIGIN
 from fs_cli.config import (Config, DEFAULT_GROUP_NAME,
-                           DEFAULT_SHOW_TEAM_ON_MAP, default_email,
-                           guess_okta_user, load, save)
+                           DEFAULT_SHOW_TEAM_ON_MAP, cache_filename,
+                           default_email, guess_okta_user, load, save)
 
 
 def cfg_dir(tmp_path):
@@ -89,6 +90,76 @@ def test_default_group_defaults_when_config_toml_predates_the_setting(
         '[identity]\nokta_user = "jamie.baker"\n\n[preferences]\n')
     assert load(d).default_group == DEFAULT_GROUP_NAME
     assert load(d).show_team_on_map == DEFAULT_SHOW_TEAM_ON_MAP
+
+
+def test_missing_show_team_on_map_is_backfilled_to_disk_with_a_note(tmp_path):
+    """Discoverability: a config.toml predating `show_team_on_map` gets the
+    setting written into the file with its default, not just filled in
+    in-memory -- same "repaired on every load, with a note" philosophy as
+    permission repair (see module docstring), so a user who never knew the
+    setting existed finds it next time they open config.toml."""
+    d = cfg_dir(tmp_path)
+    path = d / "config.toml"
+    path.write_text('[identity]\nokta_user = "jamie.baker"\n\n'
+                    '[preferences]\n')
+    os.chmod(d, 0o700)
+    os.chmod(path, 0o600)
+
+    notes = []
+    load(d, on_repair=notes.append)
+
+    assert 'show_team_on_map = "following"' in path.read_text()
+    assert any("show_team_on_map" in n for n in notes)
+
+
+def test_show_team_on_map_backfill_leaves_an_explicit_value_alone(tmp_path):
+    d = cfg_dir(tmp_path)
+    path = d / "config.toml"
+    path.write_text('[identity]\nokta_user = "jamie.baker"\n\n'
+                    '[preferences]\nshow_team_on_map = "crew"\n')
+    os.chmod(d, 0o700)
+    os.chmod(path, 0o600)
+
+    notes = []
+    load(d, on_repair=notes.append)
+
+    assert 'show_team_on_map = "crew"' in path.read_text()
+    assert notes == []
+
+
+def test_show_team_on_map_backfill_does_not_create_a_config_on_first_run(
+        tmp_path):
+    """No config.toml at all is the first-run signal -- must not create one
+    just to add this setting; `first_run` owns creating the file."""
+    d = cfg_dir(tmp_path)
+    notes = []
+    load(d, on_repair=notes.append)
+    assert not (d / "config.toml").exists()
+    assert notes == []
+
+
+# --- cache_filename: origin-scoped so `--url` can't reuse another
+# deployment's desk catalog -------------------------------------------------
+
+def test_cache_filename_is_the_bare_name_for_the_default_origin():
+    assert cache_filename(FLOORSENSE_ORIGIN) == "cache.json"
+
+
+def test_cache_filename_is_the_bare_name_for_no_origin():
+    # `cfg.floorsense_url or auth.FLOORSENSE_ORIGIN` never actually
+    # passes None, but a bare default is the safe empty-input answer.
+    assert cache_filename(None) == "cache.json"
+
+
+def test_cache_filename_is_scoped_by_host_for_a_different_origin():
+    assert (cache_filename("https://other.example.com")
+            == "cache-other.example.com.json")
+
+
+def test_cache_filename_differs_between_two_non_default_origins():
+    a = cache_filename("https://one.example.com")
+    b = cache_filename("https://two.example.com")
+    assert a != b != "cache.json"
 
 
 

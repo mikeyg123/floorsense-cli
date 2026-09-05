@@ -7,6 +7,11 @@ a tension only until you split the files:
     ~/.config/fs/session.json   machine-owned: the live cookie pair
     ~/.config/fs/cache.json     machine-owned: desk catalog, locker, policy
 
+`cache.json` is named `cache-<host>.json` instead when `--url` points at a
+non-default Floorsense origin -- desk identity is deployment-specific, so
+switching `--url` back and forth must not serve one deployment's catalog
+to another (`cache_filename`).
+
 The Okta password lives in the OS keychain via `keyring` and never in any
 file. So `config.toml` can be opened, diffed and shared without a second
 thought, and the credential material lives in files nobody hand-edits.
@@ -22,16 +27,17 @@ import stat
 import sys
 import tomllib
 from dataclasses import dataclass, field
+from urllib.parse import urlparse
 
 import tomli_w
 
 from .dates import WEEKDAYS
 from .errors import UsageError
 
-__all__ = ["Config", "config_dir", "load", "save", "guess_okta_user",
-           "default_email", "DEFAULT_ORG", "DEFAULT_DOMAIN",
-           "DEFAULT_GROUP_NAME", "DEFAULT_SHOW_TEAM_ON_MAP",
-           "BOOKING_BLOCK_REASONS"]
+__all__ = ["Config", "config_dir", "cache_filename", "load", "save",
+           "guess_okta_user", "default_email", "DEFAULT_ORG",
+           "DEFAULT_DOMAIN", "DEFAULT_GROUP_NAME",
+           "DEFAULT_SHOW_TEAM_ON_MAP", "BOOKING_BLOCK_REASONS"]
 
 #: Placeholders, not a working default for any deployment -- every Okta
 #: org/domain differs, so these are only a stand-in that keeps
@@ -63,6 +69,22 @@ def config_dir():
     base = os.environ.get("XDG_CONFIG_HOME") or (pathlib.Path.home()
                                                  / ".config")
     return pathlib.Path(base) / "fs"
+
+
+def cache_filename(origin):
+    """`cache.json`'s name for one Floorsense origin -- desk identity
+    (cid/planid/groupid) is only valid for the deployment it was fetched
+    from, so a `--url` pointing at a second deployment must not read the
+    first's cached catalog for up to `DESK_TTL_S`. Same reasoning as
+    `auth._account_key`'s keychain scoping; local import avoids a
+    config<->auth cycle. The default origin keeps the bare `cache.json`
+    name so existing installs are unaffected.
+    """
+    from .auth import FLOORSENSE_ORIGIN
+    if not origin or origin == FLOORSENSE_ORIGIN:
+        return "cache.json"
+    host = urlparse(origin).hostname or origin
+    return f"cache-{host}.json"
 
 
 def guess_okta_user(shell_user):
@@ -212,9 +234,12 @@ def ensure_dir(directory, on_repair=None):
 # --------------------------------------------------------------------------
 
 def load(directory=None, on_repair=None):
-    """Read `config.toml`, repairing permissions on the way past. A
-    missing file is the first-run signal, not an error -- comes back as
-    a default Config with `exists=False`."""
+    """Read `config.toml`, repairing permissions and backfilling a
+    missing setting (e.g. `show_team_on_map`) on the way past -- both are
+    `config.toml`-only writes, on every command that calls `load()`
+    (`fs status` included), never session.json/cache.json and never an
+    API call. A missing file is the first-run signal, not an error --
+    comes back as a default Config with `exists=False`."""
     directory = pathlib.Path(directory or config_dir())
     path = directory / "config.toml"
     if not path.exists():
@@ -234,7 +259,7 @@ def load(directory=None, on_repair=None):
 
     identity = raw.get("identity", {})
     prefs = raw.get("preferences", {})
-    return Config(
+    cfg = Config(
         okta_user=identity.get("okta_user"),
         email_domain=identity.get("email_domain", DEFAULT_DOMAIN),
         okta_org=identity.get("okta_org", DEFAULT_ORG),
@@ -250,6 +275,19 @@ def load(directory=None, on_repair=None):
         day_opening_time=prefs.get("day_opening_time"),
         exists=True,
     )
+
+    # A config.toml predating `show_team_on_map` gets it written in with
+    # its default, not just filled in in-memory -- same "repaired on
+    # every load, with a note" philosophy as the permission repair above,
+    # so a user who never knew the setting existed finds it in the file.
+    if "show_team_on_map" not in prefs:
+        save(cfg, directory, on_repair=on_repair)
+        if on_repair:
+            on_repair(f"Added new setting to {path}: "
+                      f'show_team_on_map = "{cfg.show_team_on_map}" '
+                      f"-- controls whose desks fs map highlights.")
+
+    return cfg
 
 
 def save(config, directory=None, on_repair=None):
