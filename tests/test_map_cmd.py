@@ -15,13 +15,14 @@ from fs_cli.commands.map_cmd import (
     cmd_map, crop_window, desk_at_click, desk_centers, desk_glyph_kind,
     draw_box, draw_polyline, floor_aliases, floor_names, header_line,
     local_ranks, nearest_desk, plan_for_cursor, quantize_axis, render_floor,
-    resolve_floor, resolve_team_uids, row_pitch, scroll_window,
-    terminal_columns,
+    resolve_floor, resolve_match_uids, resolve_team_uids, row_pitch,
+    scroll_window, terminal_columns,
 )
 from live_write_api import LiveWriteApi
 from fs_cli.commands.map_cmd import (
-    _run_live, _status_line, _confirm_line, _clip_visible,
-    _right_justify_hint, _initial_cursor_key, _render_lines)
+    _run_live, _run_static, _status_line, _confirm_line, _clip_visible,
+    _floor_switch_hint, _legend_text, _nav_hint_for, _right_justify_hint,
+    _initial_cursor_key, _render_lines)
 from fs_cli.errors import ExitCode, UsageError
 from fs_cli.fixtures import FixtureApi
 from fs_cli.render import Output, visible_len
@@ -231,14 +232,15 @@ def test_desk_glyph_kind_team_uids_defaults_to_no_highlighting():
     assert desk_glyph_kind("A", set(), states) == "booked"
 
 
-def test_glyph_by_kind_has_exactly_the_five_kinds():
+def test_glyph_by_kind_has_exactly_the_six_kinds():
     assert set(GLYPH_BY_KIND) == {"free", "restricted", "booked", "yours",
-                                  "team"}
+                                  "team", "match"}
     assert GLYPH_BY_KIND["free"] == "▢"
     assert GLYPH_BY_KIND["restricted"] == "■"
     assert GLYPH_BY_KIND["booked"] == "■"
     assert GLYPH_BY_KIND["yours"] == "▣"
     assert GLYPH_BY_KIND["team"] == "■"
+    assert GLYPH_BY_KIND["match"] == "■"
 
 
 def _catalog(tmp_path):
@@ -448,6 +450,22 @@ def test_crop_window_right_edge_never_exceeds_the_floors_own_content():
                               terminal_columns=80)
     assert right == 50
     assert left == 0
+
+
+def test_run_static_crop_is_anchored_on_a_match_desk_with_no_own_booking():
+    # Regression: `_run_static`'s crop used to anchor only on
+    # `highlight_positions` ("yours"-only) -- a `fs map <name>` hit with
+    # no own booking that day would crop to column 0 and never appear.
+    grid = [list("." * 20)]
+    grid[0][18] = "■"
+    desk_kind_positions = {(0, 0): "booked", (0, 18): "match"}
+    stdout, stderr = io.StringIO(), io.StringIO()
+    out = Output(today=TODAY, stdout=stdout, stderr=stderr)
+    code = _run_static(out, grid, set(), desk_kind_positions, columns=5)
+    out.finish()
+    assert code == ExitCode.OK
+    map_body, _legend = _map_and_legend(stdout.getvalue())
+    assert "■" in map_body   # the match desk's glyph, still on screen
 
 
 def test_scroll_window_is_none_with_no_terminal_size():
@@ -864,6 +882,101 @@ def test_resolve_team_uids_swallows_a_failed_following_lookup(tmp_path):
     assert resolve_team_uids(_ctx(config, api, catalog)) == frozenset()
 
 
+# -- fs map <name|team>: resolve_match_uids ---------------------------------
+
+def test_resolve_match_uids_with_a_configured_team(tmp_path):
+    catalog, api = _catalog_and_api(tmp_path)
+    config = Config()
+    config.teams = {"inception": [{"uid": "u1", "name": "Jane"},
+                                  {"uid": "u2", "name": "Bob"}]}
+    assert resolve_match_uids(_ctx(config, api, catalog), "inception",
+                              dt.date(2026, 8, 21)) == {"u1", "u2"}
+
+
+def test_resolve_match_uids_with_a_configured_team_is_case_insensitive(
+        tmp_path):
+    catalog, api = _catalog_and_api(tmp_path)
+    config = Config()
+    config.teams = {"Inception": [{"uid": "u1", "name": "Jane"}]}
+    assert resolve_match_uids(_ctx(config, api, catalog), "inception",
+                              dt.date(2026, 8, 21)) == {"u1"}
+
+
+def test_resolve_match_uids_with_following(tmp_path):
+    catalog, api = _catalog_and_api(tmp_path)
+    api.booking_summary = lambda **kw: {"users": [{"uid": "u3", "name": "Alex"}]}
+    config = Config()
+    assert resolve_match_uids(_ctx(config, api, catalog), "following",
+                              dt.date(2026, 8, 21)) == {"u3"}
+
+
+def test_resolve_match_uids_falls_back_to_a_name_search(tmp_path):
+    # "baker" isn't a configured team, so it's a `user_search` name match
+    # -- see `tests/fixtures/user-search-today.json`.
+    catalog, api = _catalog_and_api(tmp_path)
+    config = Config()
+    assert resolve_match_uids(_ctx(config, api, catalog), "baker",
+                              dt.date(2026, 8, 21)) == {"47044577"}
+
+
+def test_resolve_match_uids_no_search_hits_is_empty(tmp_path):
+    catalog, api = _catalog_and_api(tmp_path)
+    api.user_search = lambda *a, **kw: []
+    config = Config()
+    assert resolve_match_uids(_ctx(config, api, catalog), "nobody",
+                              dt.date(2026, 8, 21)) == frozenset()
+
+
+def test_resolve_match_uids_swallows_a_failed_search(tmp_path):
+    catalog, api = _catalog_and_api(tmp_path)
+
+    def _boom(*a, **kw):
+        raise RuntimeError("session hiccup")
+    api.user_search = _boom
+    config = Config()
+    assert resolve_match_uids(_ctx(config, api, catalog), "baker",
+                              dt.date(2026, 8, 21)) == frozenset()
+
+
+def test_resolve_match_uids_blank_token_is_empty(tmp_path):
+    catalog, api = _catalog_and_api(tmp_path)
+    config = Config()
+    assert resolve_match_uids(_ctx(config, api, catalog), "   ",
+                              dt.date(2026, 8, 21)) == frozenset()
+    assert resolve_match_uids(_ctx(config, api, catalog), None,
+                              dt.date(2026, 8, 21)) == frozenset()
+
+
+# -- desk_glyph_kind: match precedence ---------------------------------------
+
+def test_desk_glyph_kind_booked_by_a_match_uid_is_match():
+    states = {"A": DeskState(desk=None, free=False, book_advance=True,
+                             uid="jane-uid")}
+    assert desk_glyph_kind("A", set(), states, match_uids={"jane-uid"}) \
+        == "match"
+
+
+def test_desk_glyph_kind_match_wins_over_team():
+    states = {"A": DeskState(desk=None, free=False, book_advance=True,
+                             uid="jane-uid")}
+    assert desk_glyph_kind("A", set(), states, team_uids={"jane-uid"},
+                           match_uids={"jane-uid"}) == "match"
+
+
+def test_desk_glyph_kind_yours_wins_over_match():
+    states = {"A": DeskState(desk=None, free=False, book_advance=True,
+                             uid="jane-uid")}
+    assert desk_glyph_kind("A", {"A"}, states, match_uids={"jane-uid"}) \
+        == "yours"
+
+
+def test_desk_glyph_kind_booked_by_a_non_match_uid_stays_booked():
+    states = {"A": DeskState(desk=None, free=False, book_advance=True,
+                             uid="jane-uid")}
+    assert desk_glyph_kind("A", set(), states, match_uids={"someone-else"}) \
+        == "booked"
+
+
 def test_fs_map_with_no_args_defaults_to_level5_no_bookings(tmp_path):
     catalog, api = _catalog_and_api(tmp_path)
     code, out, _err = run(catalog, api, Args(), today=dt.date(2026, 9, 1))
@@ -917,10 +1030,10 @@ def test_fs_map_rejects_json():
                     api=None, catalog=None, args=Args(json=True)))
 
 
-def test_fs_map_rejects_more_than_two_tokens(tmp_path):
+def test_fs_map_rejects_more_than_three_tokens(tmp_path):
     catalog, api = _catalog_and_api(tmp_path)
     with pytest.raises(UsageError):
-        run(catalog, api, Args(args=["5", "mon", "extra"]),
+        run(catalog, api, Args(args=["5", "mon", "extra", "more"]),
            today=dt.date(2026, 8, 21))
 
 
@@ -931,10 +1044,48 @@ def test_fs_map_rejects_two_dates(tmp_path):
            today=dt.date(2026, 8, 21))
 
 
-def test_fs_map_rejects_an_unrecognised_token(tmp_path):
+def test_fs_map_an_unrecognised_token_is_a_name_or_team_match_not_an_error(
+        tmp_path):
+    # Neither a floor nor a date -- the one non-floor, non-date token
+    # allowed is `resolve_match_uids`'s name/team target, not an error.
+    catalog, api = _catalog_and_api(tmp_path)
+    code, _out, _err = run(catalog, api, Args(args=["bogus"]),
+                           today=dt.date(2026, 8, 21))
+    assert code == ExitCode.OK
+
+
+def test_fs_map_warns_when_the_match_token_has_no_hits(tmp_path):
+    # `user_search` genuinely empty -- swallowed to no hits by
+    # `resolve_match_uids`, warned about rather than silently drawing an
+    # unannotated map.
+    catalog, api = _catalog_and_api(tmp_path)
+    api.user_search = lambda *a, **kw: []
+    code, _out, err = run(catalog, api, Args(args=["bogus"]),
+                          today=dt.date(2026, 8, 21))
+    assert code == ExitCode.OK
+    assert "no match for 'bogus'" in err
+
+
+def test_fs_map_warns_when_a_real_match_is_on_no_desk_this_floor(tmp_path):
+    # A configured team that resolves to real members, but none of them
+    # occupy a desk on this floor/date -- distinct from the no-hits-at-all
+    # warning above.
+    catalog, api = _catalog_and_api(tmp_path)
+    config = Config()
+    config.teams = {"inception": [{"uid": "nobody-here", "name": "Jane"}]}
+    stdout, stderr = io.StringIO(), io.StringIO()
+    out = Output(today=dt.date(2026, 8, 21), stdout=stdout, stderr=stderr)
+    code = cmd_map(Ctx(out, config, api, catalog, Args(args=["inception"])))
+    out.finish()
+    assert code == ExitCode.OK
+    assert "'inception' matches nobody on this floor" in stderr.getvalue()
+
+
+def test_fs_map_rejects_two_unrecognised_tokens(tmp_path):
     catalog, api = _catalog_and_api(tmp_path)
     with pytest.raises(UsageError):
-        run(catalog, api, Args(args=["bogus"]), today=dt.date(2026, 8, 21))
+        run(catalog, api, Args(args=["bogus", "alsobogus"]),
+           today=dt.date(2026, 8, 21))
 
 
 def test_fs_map_rejects_forced_desk_flag(tmp_path):
@@ -995,6 +1146,158 @@ def test_cmd_map_prints_a_legend_line(tmp_path):
     assert "▢" in legend and "free" in legend
     assert "■" in legend and "unavailable" in legend
     assert "▣" in legend and "yours" in legend
+
+
+def test_cmd_map_legend_shows_the_default_following_team_by_name(tmp_path):
+    # `Config()`'s default `show_team_on_map` is "following" -- the
+    # legend must say that real name, not the generic word "team".
+    catalog, api = _catalog_and_api(tmp_path)
+    code, out, _err = run(catalog, api, Args(no_nav=True),
+                          today=dt.date(2026, 9, 1))
+    assert code == ExitCode.OK
+    _map_body, legend = _map_and_legend(out)
+    assert "following" in legend
+
+
+def test_cmd_map_legend_shows_a_configured_team_by_name(tmp_path):
+    catalog, api = _catalog_and_api(tmp_path)
+    config = Config()
+    config.show_team_on_map = "crew"
+    config.teams = {"crew": [{"uid": "u1", "name": "Jane"}]}
+    stdout, stderr = io.StringIO(), io.StringIO()
+    out = Output(today=dt.date(2026, 9, 1), stdout=stdout, stderr=stderr)
+    code = cmd_map(Ctx(out, config, api, catalog, Args(no_nav=True)))
+    out.finish()
+    assert code == ExitCode.OK
+    _map_body, legend = _map_and_legend(stdout.getvalue())
+    assert "crew" in legend
+    assert "following" not in legend
+
+
+def test_cmd_map_legend_shows_the_typed_match_token(tmp_path):
+    catalog, api = _catalog_and_api(tmp_path)
+    code, out, _err = run(catalog, api, Args(args=["baker"], no_nav=True),
+                          today=dt.date(2026, 8, 21))
+    assert code == ExitCode.OK
+    _map_body, legend = _map_and_legend(out)
+    assert "baker" in legend
+
+
+def test_cmd_map_legend_omits_match_when_no_token_typed(tmp_path):
+    catalog, api = _catalog_and_api(tmp_path)
+    code, out, _err = run(catalog, api, Args(no_nav=True),
+                          today=dt.date(2026, 9, 1))
+    assert code == ExitCode.OK
+    _map_body, legend = _map_and_legend(out)
+    # Only the always-present entries and the default "following" team --
+    # nothing named after a match target that was never typed.
+    assert "■" in legend
+    assert legend.count("■") == 2   # unavailable, following
+
+
+def test_legend_text_matches_across_static_and_live_views():
+    # One source of truth: `_run_static`'s dedicated legend line and
+    # `header_line`'s embedded one must never say something different.
+    out = Output(today=TODAY, stdout=io.StringIO(), stderr=io.StringIO())
+    assert _legend_text(out, sep="   ", team_label="crew", match_label="jane") == (
+        f"{out.good('▢')} free   {out.danger('■')} unavailable   "
+        f"{out.teammate('■')} crew   {out.matched('■')} jane   "
+        f"{out.attention('▣')} yours")
+
+
+def test_legend_text_with_neither_label_omits_team_and_match():
+    # No `show_team_on_map` configured and no match token typed --
+    # neither colour could ever appear, so neither entry belongs.
+    out = Output(today=TODAY, stdout=io.StringIO(), stderr=io.StringIO())
+    line = _legend_text(out, sep="   ")
+    assert "team" not in line and "match" not in line
+    assert "free" in line and "unavailable" in line and "yours" in line
+
+
+def test_legend_text_shows_the_real_team_name():
+    out = Output(today=TODAY, stdout=io.StringIO(), stderr=io.StringIO())
+    assert "inception" in _legend_text(out, team_label="inception")
+
+
+def test_legend_text_shows_the_real_match_token():
+    out = Output(today=TODAY, stdout=io.StringIO(), stderr=io.StringIO())
+    assert "baker" in _legend_text(out, match_label="baker")
+
+
+def test_legend_text_with_the_default_following_team():
+    out = Output(today=TODAY, stdout=io.StringIO(), stderr=io.StringIO())
+    assert "following" in _legend_text(out, team_label="following")
+
+
+def test_legend_text_collapses_a_team_and_match_on_the_same_target():
+    # Regression: typing the same team name that's already configured as
+    # `show_team_on_map` used to show it twice ("team" and "match" both
+    # labelled identically) -- `desk_glyph_kind`'s own "match beats team"
+    # precedence means the magenta colour could never actually appear
+    # for that team, so the "team" entry is dropped, case/whitespace-
+    # insensitively.
+    out = Output(today=TODAY, color=True, stdout=io.StringIO(),
+                stderr=io.StringIO())
+    line = _legend_text(out, team_label="Inception", match_label=" inception ")
+    assert line.count("inception") + line.count("Inception") == 1
+    assert out.matched("■") in line
+    assert out.teammate("■") not in line
+
+
+def test_run_live_shows_the_legend_on_the_header_line(tmp_path):
+    # Feedback: the live view had no colour-key legend at all -- only
+    # `_run_static` did. Fit onto the header row via `header_line`'s
+    # `columns` param rather than spending a whole extra row on it.
+    catalog, api = _catalog_and_api(tmp_path)
+    stdout, stderr = io.StringIO(), io.StringIO()
+    out = Output(today=dt.date(2026, 9, 1), stdout=stdout, stderr=stderr)
+    planid, highlight_keys = resolve_floor(api, catalog, out.today,
+                                           out.today, None)
+    polys = catalog.deskpolys(planid)
+    catalog_keys = {d.key for d in catalog.desks() if d.planid == planid}
+    img_w, img_h = catalog.floor_image_size(planid)
+    desk_states = catalog.availability(out.today, planids=[planid])
+    grid, highlight_positions, desk_kind_positions, desk_positions = \
+        render_floor(planid, polys, catalog_keys, img_w, img_h,
+                    highlight_keys=highlight_keys, desk_states=desk_states)
+
+    ctx = Ctx(out, Config(), api, catalog, Args())
+    code = _run_live(ctx, planid, out.today, grid, highlight_positions,
+                     desk_kind_positions, desk_positions, columns=200,
+                     read_key=ScriptedKeys(["q"]),
+                     initial_cursor_key=next(iter(desk_positions)))
+    assert code == ExitCode.OK
+    output = stdout.getvalue()
+    assert "▢ free" in output and "▣ yours" in output
+    # Same row as the floor/date label, not a line of its own.
+    header_row = next(line for line in output.splitlines() if "▢ free" in line)
+    assert "Level 5" in header_row
+
+
+def test_run_live_header_legend_shows_the_real_team_and_match_labels(tmp_path):
+    catalog, api = _catalog_and_api(tmp_path)
+    stdout, stderr = io.StringIO(), io.StringIO()
+    out = Output(today=dt.date(2026, 9, 1), stdout=stdout, stderr=stderr)
+    planid, highlight_keys = resolve_floor(api, catalog, out.today,
+                                           out.today, None)
+    polys = catalog.deskpolys(planid)
+    catalog_keys = {d.key for d in catalog.desks() if d.planid == planid}
+    img_w, img_h = catalog.floor_image_size(planid)
+    desk_states = catalog.availability(out.today, planids=[planid])
+    grid, highlight_positions, desk_kind_positions, desk_positions = \
+        render_floor(planid, polys, catalog_keys, img_w, img_h,
+                    highlight_keys=highlight_keys, desk_states=desk_states)
+
+    ctx = Ctx(out, Config(), api, catalog, Args())
+    code = _run_live(ctx, planid, out.today, grid, highlight_positions,
+                     desk_kind_positions, desk_positions, columns=200,
+                     read_key=ScriptedKeys(["q"]),
+                     initial_cursor_key=next(iter(desk_positions)),
+                     team_label="crew", match_label="baker")
+    assert code == ExitCode.OK
+    output = stdout.getvalue()
+    assert "crew" in output and "baker" in output
+    assert "■ team" not in output and "■ match" not in output
 
 
 def test_cmd_map_glyph_counts_match_live_availability(tmp_path):
@@ -1121,6 +1424,69 @@ def test_cmd_map_following_highlights_a_followed_colleagues_desk(tmp_path):
     assert "\x1b[35m" in map_body
 
 
+def test_cmd_map_match_token_colours_a_configured_teams_desk_cyan(tmp_path):
+    catalog, api = _catalog_and_api(tmp_path)
+    _availability_with_a_teammate(catalog, "teammate-uid")
+    config = Config()
+    config.teams = {"inception": [{"uid": "teammate-uid", "name": "Jane"}]}
+    stdout, stderr = io.StringIO(), io.StringIO()
+    out = Output(today=dt.date(2026, 9, 1), color=True, stdout=stdout,
+                stderr=stderr)
+    code = cmd_map(Ctx(out, config, api, catalog, Args(args=["inception"])))
+    out.finish()
+    assert code == ExitCode.OK
+    map_body, _legend = _map_and_legend(stdout.getvalue())
+    assert "\x1b[36m" in map_body   # cyan -- ANSI colour 6
+
+
+def test_cmd_map_match_token_takes_precedence_over_show_team_on_map(tmp_path):
+    # Same uid is both the configured `show_team_on_map` team AND the
+    # typed match target -- cyan wins, no magenta at all.
+    catalog, api = _catalog_and_api(tmp_path)
+    _availability_with_a_teammate(catalog, "teammate-uid")
+    config = Config()
+    config.teams = {"inception": [{"uid": "teammate-uid", "name": "Jane"}]}
+    config.show_team_on_map = "inception"
+    stdout, stderr = io.StringIO(), io.StringIO()
+    out = Output(today=dt.date(2026, 9, 1), color=True, stdout=stdout,
+                stderr=stderr)
+    code = cmd_map(Ctx(out, config, api, catalog, Args(args=["inception"])))
+    out.finish()
+    assert code == ExitCode.OK
+    map_body, _legend = _map_and_legend(stdout.getvalue())
+    assert "\x1b[36m" in map_body
+    assert "\x1b[35m" not in map_body
+
+
+def test_cmd_map_match_token_name_search_colours_desk_cyan(tmp_path):
+    # "baker" isn't a configured team -- falls through to the
+    # `user_search` name-match branch of `resolve_match_uids`, using the
+    # real captured uid from tests/fixtures/user-search-today.json.
+    # `FixtureApi` ignores the searched name for matching (it's a
+    # VOLATILE_PARAM, see fixtures.py) -- `seen` below is what actually
+    # proves the typed token reaches `api.user_search`, since the fixture
+    # itself would return the same hit for any name.
+    catalog, api = _catalog_and_api(tmp_path)
+    _availability_with_a_teammate(catalog, "47044577")
+    real_user_search = api.user_search
+    seen = []
+
+    def _tracked(name, start, finish):
+        seen.append(name)
+        return real_user_search(name, start, finish)
+    api.user_search = _tracked
+    config = Config()
+    stdout, stderr = io.StringIO(), io.StringIO()
+    out = Output(today=dt.date(2026, 8, 21), color=True, stdout=stdout,
+                stderr=stderr)
+    code = cmd_map(Ctx(out, config, api, catalog, Args(args=["baker"])))
+    out.finish()
+    assert code == ExitCode.OK
+    assert seen == ["baker"]
+    map_body, _legend = _map_and_legend(stdout.getvalue())
+    assert "\x1b[36m" in map_body
+
+
 def test_plan_for_cursor_free_with_no_current_booking_is_create():
     assert plan_for_cursor("free", "L5.D.05", None) == ("create", None)
 
@@ -1224,6 +1590,32 @@ def test_run_live_quits_cleanly_on_q(tmp_path):
                      read_key=ScriptedKeys(["q"]),
                      initial_cursor_key=next(iter(desk_positions)))
     assert code == ExitCode.OK
+
+
+def test_run_live_shows_the_floor_switch_hint_for_the_real_catalog(tmp_path):
+    # End-to-end: `_run_live` actually threads its own `nav_hint`
+    # (built from the real 5/6 fixture data via `_nav_hint_for`) into
+    # the printed frame, not the `_status_line` fallback.
+    catalog, api = _catalog_and_api(tmp_path)
+    stdout, stderr = io.StringIO(), io.StringIO()
+    out = Output(today=dt.date(2026, 9, 1), stdout=stdout, stderr=stderr)
+    planid, highlight_keys = resolve_floor(api, catalog, out.today,
+                                           out.today, None)
+    polys = catalog.deskpolys(planid)
+    catalog_keys = {d.key for d in catalog.desks() if d.planid == planid}
+    img_w, img_h = catalog.floor_image_size(planid)
+    desk_states = catalog.availability(out.today, planids=[planid])
+    grid, highlight_positions, desk_kind_positions, desk_positions = \
+        render_floor(planid, polys, catalog_keys, img_w, img_h,
+                    highlight_keys=highlight_keys, desk_states=desk_states)
+
+    ctx = Ctx(out, Config(), api, catalog, Args())
+    code = _run_live(ctx, planid, out.today, grid, highlight_positions,
+                     desk_kind_positions, desk_positions, columns=200,
+                     read_key=ScriptedKeys(["q"]),
+                     initial_cursor_key=next(iter(desk_positions)))
+    assert code == ExitCode.OK
+    assert "[5/6] floor" in stdout.getvalue()
 
 
 def test_run_live_moves_the_cursor_with_an_arrow_key(tmp_path):
@@ -1795,6 +2187,53 @@ def test_header_line_falls_back_to_the_bare_planid_if_unnamed():
     assert header_line(out, 999, TODAY, TEST_FLOOR_NAMES).startswith("planid 999")
 
 
+# -- header_line's own legend, right-justified onto the same row --------
+
+def test_header_line_with_no_columns_is_unchanged_plain_text():
+    # `_run_static`'s own dedicated legend line, and every direct/test
+    # call above, don't pass `columns` -- must stay exactly the plain
+    # floor/date text, no legend appended.
+    out = Output(today=TODAY, stdout=io.StringIO(), stderr=io.StringIO())
+    assert header_line(out, PLANID_LEVEL5, TODAY, TEST_FLOOR_NAMES) \
+        == f"Level 5 -- {out.fmt_date(TODAY)}"
+
+
+def test_header_line_with_columns_appends_the_legend():
+    out = Output(today=TODAY, stdout=io.StringIO(), stderr=io.StringIO())
+    line = header_line(out, PLANID_LEVEL5, TODAY, TEST_FLOOR_NAMES,
+                       columns=200)
+    assert line.startswith(f"Level 5 -- {out.fmt_date(TODAY)}")
+    assert "▢ free" in line and "▣ yours" in line
+
+
+def test_header_line_legend_fits_within_the_given_width():
+    out = Output(today=TODAY, stdout=io.StringIO(), stderr=io.StringIO())
+    for columns in (40, 60, 80, 120):
+        line = header_line(out, PLANID_LEVEL5, TODAY, TEST_FLOOR_NAMES,
+                           columns=columns)
+        assert visible_len(line) <= columns - 1
+
+
+def test_header_line_legend_survives_a_narrow_terminal_by_clipping_the_label():
+    # The floor/date text clips first (`_right_justify_hint`'s "protect
+    # the right-hand hint" rule) -- the legend itself stays intact as
+    # long as it alone still fits.
+    out = Output(today=TODAY, stdout=io.StringIO(), stderr=io.StringIO())
+    line = header_line(out, PLANID_LEVEL5, TODAY, TEST_FLOOR_NAMES,
+                       columns=52)
+    assert "▢ free" in line and "▣ yours" in line
+    assert "…" in line   # the label, not the legend, is what got clipped
+
+
+def test_header_line_clips_the_legend_too_when_even_it_does_not_fit():
+    # Pathological width -- same fallback `_right_justify_hint` documents
+    # for its own hint-alone-too-wide case.
+    out = Output(today=TODAY, stdout=io.StringIO(), stderr=io.StringIO())
+    line = header_line(out, PLANID_LEVEL5, TODAY, TEST_FLOOR_NAMES,
+                       columns=20)
+    assert visible_len(line) <= 20
+
+
 def test_desk_at_click_maps_a_terminal_click_to_the_desk_under_it():
     # header_lines=1 (the default), left=5: a click at terminal (col=8,
     # row=3) lands on grid (row 1, col 8-1+5=12).
@@ -1958,6 +2397,23 @@ def test_initial_cursor_key_falls_back_to_top_leftmost_when_group_has_none_free(
     key = _initial_cursor_key(["........"], desk_positions,
                               desk_kind_positions, set(), None,
                               group_keys=["A"])
+    assert key == "B"
+
+
+def test_initial_cursor_key_prefers_a_match_desk_over_the_group_fallback():
+    desk_positions = {"A": (0, 1), "B": (0, 3)}
+    desk_kind_positions = {(0, 1): "free", (0, 3): "match"}
+    key = _initial_cursor_key(["........"], desk_positions,
+                              desk_kind_positions, set(), None,
+                              group_keys=["A"])
+    assert key == "B"
+
+
+def test_initial_cursor_key_yours_still_wins_over_match():
+    desk_positions = {"A": (0, 1), "B": (0, 3)}
+    desk_kind_positions = {(0, 1): "match", (0, 3): "yours"}
+    key = _initial_cursor_key(["........"], desk_positions,
+                              desk_kind_positions, set(), None)
     assert key == "B"
 
 
@@ -2217,12 +2673,66 @@ def test_status_line_team_with_no_occupant_yet_is_plain_unavailable():
 
 def test_status_line_lists_the_day_and_floor_keys():
     # Feedback: the day (PgUp/PgDn/n/p) and floor (5/6) keys weren't
-    # discoverable at all -- only move/quit were ever shown.
+    # discoverable at all -- only move/quit were ever shown. Exercises
+    # `_status_line`'s fallback `_NAV_HINT` (no `nav_hint` given) -- a
+    # real `_run_live` call always passes its own, see the tests below.
     out = Output(today=dt.date(2026, 9, 1), stdout=io.StringIO(),
                 stderr=io.StringIO())
     line = _status_line(out, "5.12", "free", None)
     assert "[n/p] day" in line
     assert "[5/6] floor" in line
+
+
+# -- the floor-switch hint dynamically matches the actual floors --------
+
+def test_floor_switch_hint_lists_every_single_key_floor_alias():
+    assert _floor_switch_hint({"5": 5, "6": 6, "level5": 5, "level6": 6}) \
+        == "[5/6] floor  "
+
+
+def test_floor_switch_hint_is_not_limited_to_two_floors():
+    # Regression: `_NAV_HINT` used to hardcode `[5/6]` -- a third (or
+    # differently-numbered) floor must show up too.
+    assert _floor_switch_hint({"5": 5, "6": 6, "7": 7}) == "[5/6/7] floor  "
+
+
+def test_floor_switch_hint_is_empty_with_only_one_switchable_floor():
+    # Nothing to switch to/from -- a single-floor workplace (or a
+    # multi-floor one whose other floors have no single-key alias)
+    # shouldn't advertise a floor-switch key at all.
+    assert _floor_switch_hint({"5": 5, "level5": 5}) == ""
+
+
+def test_floor_switch_hint_is_empty_with_no_floors():
+    assert _floor_switch_hint({}) == ""
+
+
+def test_floor_switch_hint_ignores_multi_character_aliases():
+    # A floor whose only alias is its full name (`floor_aliases` never
+    # gave it a bare-digit one) isn't reachable by a single keypress, so
+    # it must not appear in the hint even though it IS in `floor_tokens`.
+    assert _floor_switch_hint({"5": 5, "mezzanine": 99}) == ""
+
+
+def test_nav_hint_for_embeds_the_floor_switch_hint():
+    hint = _nav_hint_for({"5": 5, "6": 6})
+    assert "[5/6] floor" in hint
+    assert "[n/p] day" in hint
+    assert "[q] quit" in hint
+
+
+def test_nav_hint_for_omits_the_floor_segment_with_one_floor():
+    hint = _nav_hint_for({"5": 5})
+    assert "floor" not in hint
+    assert "[n/p] day  [q] quit" in hint     # no double space left behind
+
+
+def test_status_line_accepts_a_dynamic_nav_hint():
+    out = Output(today=dt.date(2026, 9, 1), stdout=io.StringIO(),
+                stderr=io.StringIO())
+    line = _status_line(out, "5.12", "free", None,
+                        nav_hint=_nav_hint_for({"5": 5, "6": 6, "7": 7}))
+    assert "[5/6/7] floor" in line
 
 
 # -- right-justified keyboard hints, and the 2-terminal-row wrap fix -------

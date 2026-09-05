@@ -3,8 +3,11 @@ config.
 
 Clears `session.json` (cookies) and `cache.json` (desk catalog, policy,
 locker cache) -- everything server-derived, which rebuilds itself with
-no user effort. Leaves `config.toml`'s `[preferences]`/`[groups]`/
-`[teams]` alone -- hand-authored via `fs desks`/`fs team`/`fs office-days`.
+no user effort. `cache.json`'s actual name is origin-scoped
+(`config.cache_filename`), so a `--url` session's reset only ever
+touches its own deployment's cache. Leaves `config.toml`'s
+`[preferences]`/`[groups]`/`[teams]` alone -- hand-authored via `fs
+desks`/`fs team`/`fs office-days`.
 
 `[identity]` (`okta_user`, `email_domain`, `okta_org`) is user-typed-once
 rather than server-discovered, so the default `fs reset` leaves it alone
@@ -38,11 +41,13 @@ def cmd_reset(ctx, stdin=None):
     full = bool(getattr(args, "full", False))
     stdin = stdin if stdin is not None else sys.stdin
 
+    origin = cfg.floorsense_url or auth.FLOORSENSE_ORIGIN
     session_path = ctx.directory / "session.json"
-    cache_path = ctx.directory / "cache.json"
+    # Scoped by origin like `cli.py`'s own `CacheStore` -- a `--url`
+    # session clears its OWN cache, never the default deployment's.
+    cache_path = ctx.directory / config_mod.cache_filename(origin)
     has_session = session_path.exists()
     has_cache = cache_path.exists()
-    origin = cfg.floorsense_url or auth.FLOORSENSE_ORIGIN
     has_identity = full and bool(cfg.okta_user)
     has_password = full and bool(
         cfg.okta_user and auth.has_stored_password(cfg.okta_user,
@@ -52,7 +57,8 @@ def cmd_reset(ctx, stdin=None):
     if has_session:
         targets.append("session.json (session cookies)")
     if has_cache:
-        targets.append("cache.json (desk catalog, policy, locker cache)")
+        targets.append(f"{cache_path.name} (desk catalog, policy, "
+                       "locker cache)")
     if has_identity:
         targets.append("config.toml identity (okta_user, okta_org, "
                        "email_domain)")

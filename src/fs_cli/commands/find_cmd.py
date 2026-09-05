@@ -254,7 +254,16 @@ def resolve_targets(ctx, usage="this command"):
         else:
             remaining.append(t)
 
-    vocab = Vocabulary(today=out.today, groups=cfg.groups, teams=cfg.teams)
+    # `desk_keys` is needed only so a desk-shaped token classifies as
+    # DESK and `bind()` rejects it by name ("looks like a desk, which
+    # this command doesn't take") -- without it, a token like `5.235`
+    # falls through to NAME (see `classify`'s fallback) and becomes a
+    # silent, always-empty `user_search` instead of a clear usage error.
+    # Costs no extra catalog fetch in practice: `cmd_list` calls
+    # `ctx.load_tags()` (which also fetches `catalog.desks()`)
+    # immediately after this returns, on every invocation.
+    vocab = Vocabulary(today=out.today, groups=cfg.groups, teams=cfg.teams,
+                       desk_keys=ctx.catalog.desk_keys())
     bound = bind(remaining, vocab, _ACCEPTS,
                 forced={TokenType.DATE: ctx.args.date,
                         TokenType.NAME: ctx.args.name})
