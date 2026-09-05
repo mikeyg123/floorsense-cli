@@ -1,6 +1,6 @@
 [project]
 name = "floorsense-cli"
-version = "0.4.0"
+version = "0.5.0"
 description = "fs -- desk and locker booking at the command line, via Floorsense"
 requires-python = ">=3.11"          # tomllib is stdlib from 3.11
 license = "LGPL-2.1-only"
