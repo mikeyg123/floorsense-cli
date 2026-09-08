@@ -464,6 +464,53 @@ def test_lockers_are_cached_so_ordinary_commands_pay_nothing(tmp_path):
     assert "res-list" not in api.counts
 
 
+# -- followed users ----------------------------------------------------------
+
+def test_followed_reads_the_users_field(catalog):
+    current = catalog.followed()
+    assert isinstance(current, list)
+    assert all(isinstance(pair, tuple) and len(pair) == 2 for pair in current)
+
+
+def test_followed_is_memoized_for_the_run(tmp_path):
+    api = CountingApi()
+    catalog = Catalog(api, CacheStore(tmp_path / "cache.json"))
+    catalog.followed()
+    catalog.followed()
+    assert api.counts.get("booking-summary") == 1
+
+
+def test_followed_refresh_forces_a_new_fetch(tmp_path):
+    api = CountingApi()
+    catalog = Catalog(api, CacheStore(tmp_path / "cache.json"))
+    catalog.followed()
+    catalog.followed(refresh=True)
+    assert api.counts.get("booking-summary") == 2
+
+
+def test_remember_followed_warms_the_memo_without_a_fetch(tmp_path):
+    api = CountingApi()
+    catalog = Catalog(api, CacheStore(tmp_path / "cache.json"))
+    catalog.remember_followed({"users": [{"uid": "u1", "name": "Jane"}]})
+    assert catalog.followed() == [("u1", "Jane")]
+    assert "booking-summary" not in api.counts
+
+
+def test_remember_followed_never_overwrites_an_existing_memo(tmp_path):
+    api = CountingApi()
+    catalog = Catalog(api, CacheStore(tmp_path / "cache.json"))
+    catalog.remember_followed({"users": [{"uid": "u1", "name": "Jane"}]})
+    catalog.remember_followed({"users": [{"uid": "u2", "name": "Bob"}]})
+    assert catalog.followed() == [("u1", "Jane")]
+
+
+def test_remember_followed_ignores_non_dict_user_entries(tmp_path):
+    api = CountingApi()
+    catalog = Catalog(api, CacheStore(tmp_path / "cache.json"))
+    catalog.remember_followed({"users": [{"uid": "u1", "name": "Jane"}, "junk", None]})
+    assert catalog.followed() == [("u1", "Jane")]
+
+
 # -- desk geometry -----------------------------------------------------------
 
 def test_deskpolys_returns_every_poly_keyed_by_desk_id(catalog):

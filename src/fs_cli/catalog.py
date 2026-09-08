@@ -148,6 +148,7 @@ class Catalog:
         self._desks = None
         self._planids = None
         self._desk_index = None
+        self._followed = None
 
     # -- desk identity (cached) ---------------------------------------------
 
@@ -425,6 +426,38 @@ class Catalog:
         """The booking window in whole days, from `book_advance_mins`."""
         mins = (self.policy() or {}).get("book_advance_mins")
         return int(mins // (24 * 60)) if isinstance(mins, int) else None
+
+    # -- followed users (memoized for the run, never persisted) -------------
+
+    def _users_from_summary(self, summary):
+        users = [u for u in (summary or {}).get("users") or []
+                 if isinstance(u, dict)]
+        return [(u.get("uid"), u.get("name") or u.get("uid")) for u in users]
+
+    def remember_followed(self, summary):
+        """Warm `followed()`'s memo from a `booking-summary` response
+        already fetched elsewhere (`list_cmd.own_bookings`'s own,
+        wider-window call carries the identical `users` field -- who you
+        follow isn't day-windowed data) -- avoids a second,
+        narrower-`days` `booking-summary` call purely to learn the same
+        thing again. Never overwrites an existing memo, so the first
+        fetch of the run always wins."""
+        if self._followed is not None:
+            return
+        self._followed = self._users_from_summary(summary)
+
+    def followed(self, refresh=False):
+        """`(uid, name)` pairs for everyone this account follows --
+        `booking-summary`'s own `users` field (§5.1). Memoized for the
+        process's lifetime only, never written to `cache.json`: unlike
+        `own_uid`/`policy`, this isn't worth a multi-day TTL (who you
+        follow can change any time), but re-fetching it twice for two
+        different callers within the SAME command run is pure waste --
+        `remember_followed` is the other way this gets populated."""
+        if self._followed is not None and not refresh:
+            return self._followed
+        self._followed = self._users_from_summary(self.api.booking_summary(days=1))
+        return self._followed
 
     # -- lockers (cached daily) ---------------------------------------------
 

@@ -145,9 +145,16 @@ def _covers_today_or_later(booking, today):
     return end >= today if end else True
 
 
-def own_bookings(api, today):
+def own_bookings(api, today, catalog=None):
     """Every own booking from today forward, from both sources, deduped
-    -- see module docstring for why two sources."""
+    -- see module docstring for why two sources.
+
+    `catalog`, when given, gets this call's `booking-summary` response
+    handed to `Catalog.remember_followed` -- that response's `users`
+    field already IS the `following` list `map_cmd.resolve_team_uids`/
+    `resolve_match_uids` would otherwise fetch all over again with a
+    second, narrower-`days` call for the exact same data.
+    """
     found = {}
     for row in api.booking_list():
         if row.get("bkid") and not row.get("released"):
@@ -159,6 +166,9 @@ def own_bookings(api, today):
         # A best-effort supplement must never break `fs list` -- the
         # primary source has already answered.
         return sorted(found.values(), key=lambda b: b.get("start") or 0)
+
+    if catalog is not None:
+        catalog.remember_followed(summary)
 
     for day in (summary or {}).get("days") or []:
         for row in day.get("bookings") or []:

@@ -651,6 +651,9 @@ class FakeCatalog:
     def planids(self):
         return list(self._planids)
 
+    def remember_followed(self, summary):
+        pass    # `own_bookings`'s side-channel warm; irrelevant here
+
 
 class FakeApi:
     def __init__(self, booking_list=None, booking_summary=None):
@@ -1242,6 +1245,151 @@ def test_legend_text_collapses_a_team_and_match_on_the_same_target():
     assert line.count("inception") + line.count("Inception") == 1
     assert out.matched("■") in line
     assert out.teammate("■") not in line
+
+
+def test_resolve_floor_with_bookings_given_never_calls_own_bookings(tmp_path):
+    # Perf regression: `resolve_floor` used to always fetch `own_bookings`
+    # itself, even when the caller (`cmd_map`) already had it -- passing
+    # `bookings=` must skip that fetch entirely, not just reuse the result
+    # after fetching it anyway.
+    catalog, api = _catalog_and_api(tmp_path)
+
+    def _boom():
+        raise AssertionError("own_bookings must not be called when "
+                             "bookings= is given")
+    api.booking_list = _boom
+    api.booking_summary = lambda **kw: _boom()
+    planid, highlight = resolve_floor(api, catalog, TODAY, TODAY, None,
+                                      bookings=[])
+    assert planid is not None   # didn't raise -- the real assertion
+
+
+def test_run_live_with_bookings_given_never_refetches_own_bookings(tmp_path):
+    # Perf regression: entering the live view used to always re-fetch
+    # `own_bookings` -- a full extra `booking-list` + `booking-summary`
+    # round trip on every single interactive `fs map`, duplicating what
+    # `cmd_map` (via `resolve_floor`) had already fetched moments
+    # earlier. Passing `bookings=` must skip that fetch.
+    catalog, api = _catalog_and_api(tmp_path)
+    stdout, stderr = io.StringIO(), io.StringIO()
+    out = Output(today=dt.date(2026, 9, 1), stdout=stdout, stderr=stderr)
+    planid, highlight_keys = resolve_floor(api, catalog, out.today,
+                                           out.today, None)
+    polys = catalog.deskpolys(planid)
+    catalog_keys = {d.key for d in catalog.desks() if d.planid == planid}
+    img_w, img_h = catalog.floor_image_size(planid)
+    desk_states = catalog.availability(out.today, planids=[planid])
+    grid, highlight_positions, desk_kind_positions, desk_positions = \
+        render_floor(planid, polys, catalog_keys, img_w, img_h,
+                    highlight_keys=highlight_keys, desk_states=desk_states)
+
+    # Pre-warm the identity/policy cache `_run_live` also reads
+    # (`catalog.own_uid()`/`book_day_start_mins()`) so its own,
+    # unrelated `booking-list` call is served from cache -- isolates
+    # this test to just the `own_bookings` duplication being fixed.
+    catalog.own_uid()
+    catalog.own_ugroupid()
+    catalog.policy()
+
+    def _boom():
+        raise AssertionError("own_bookings must not be re-fetched when "
+                             "bookings= is given")
+    api.booking_list = _boom
+    api.booking_summary = lambda **kw: _boom()
+
+    ctx = Ctx(out, Config(), api, catalog, Args())
+    code = _run_live(ctx, planid, out.today, grid, highlight_positions,
+                     desk_kind_positions, desk_positions, columns=120,
+                     read_key=ScriptedKeys(["q"]),
+                     initial_cursor_key=next(iter(desk_positions)),
+                     bookings=[])
+    assert code == ExitCode.OK   # didn't raise -- the real assertion
+
+
+def test_run_live_with_no_bookings_given_still_fetches_them(tmp_path):
+    # `bookings=None` (every direct/test call not exercising the fix
+    # above) must keep working exactly as before.
+    catalog, api = _catalog_and_api(tmp_path)
+    stdout, stderr = io.StringIO(), io.StringIO()
+    out = Output(today=dt.date(2026, 9, 1), stdout=stdout, stderr=stderr)
+    planid, highlight_keys = resolve_floor(api, catalog, out.today,
+                                           out.today, None)
+    polys = catalog.deskpolys(planid)
+    catalog_keys = {d.key for d in catalog.desks() if d.planid == planid}
+    img_w, img_h = catalog.floor_image_size(planid)
+    desk_states = catalog.availability(out.today, planids=[planid])
+    grid, highlight_positions, desk_kind_positions, desk_positions = \
+        render_floor(planid, polys, catalog_keys, img_w, img_h,
+                    highlight_keys=highlight_keys, desk_states=desk_states)
+
+    ctx = Ctx(out, Config(), api, catalog, Args())
+    code = _run_live(ctx, planid, out.today, grid, highlight_positions,
+                     desk_kind_positions, desk_positions, columns=120,
+                     read_key=ScriptedKeys(["q"]),
+                     initial_cursor_key=next(iter(desk_positions)))
+    assert code == ExitCode.OK
+
+
+def test_cmd_map_live_view_fetches_own_bookings_exactly_once(tmp_path,
+                                                              monkeypatch):
+    # End-to-end: a real `fs map` invocation, live view (the common
+    # case), must issue `booking-list` exactly once, not twice --
+    # `_run_live` no longer re-fetches what `cmd_map`/`resolve_floor`
+    # already fetched. `show_team_on_map` is turned off so this counts
+    # only that duplication, not the separate one below.
+    from fs_cli import keyread
+    catalog, api = _catalog_and_api(tmp_path)
+    calls = []
+    orig_get = api._get
+
+    def counting_get(path, params=None):
+        if path in ("booking-list", "booking-summary"):
+            calls.append(path)
+        return orig_get(path, params)
+    api._get = counting_get
+    monkeypatch.setattr(keyread, "capable", lambda stdin: 5)
+    monkeypatch.setattr(keyread, "read_key", lambda stdin: "q")
+
+    config = Config()
+    config.show_team_on_map = ""
+    stdout, stderr = io.StringIO(), io.StringIO()
+    out = Output(today=dt.date(2026, 9, 1), stdout=stdout, stderr=stderr)
+    code = cmd_map(Ctx(out, config, api, catalog, Args()),
+                   stdin=io.StringIO())
+    assert code == ExitCode.OK
+    assert calls.count("booking-list") == 1
+    assert calls.count("booking-summary") == 1
+
+
+def test_cmd_map_default_following_shares_own_bookings_summary_fetch(
+        tmp_path, monkeypatch):
+    # Perf regression: `show_team_on_map`'s default ("following") used to
+    # cost a full SECOND `booking-summary` call (`resolve_team_uids` ->
+    # `resolve_team_membership` -> `_current_following`, `days=1`) even
+    # though `own_bookings`'s own `days=15` call (fetched moments earlier
+    # for the SAME command) already carries the identical `users` field.
+    # `Catalog.followed()`/`remember_followed` share that one fetch.
+    from fs_cli import keyread
+    catalog, api = _catalog_and_api(tmp_path)
+    calls = []
+    orig_get = api._get
+
+    def counting_get(path, params=None):
+        if path in ("booking-list", "booking-summary"):
+            calls.append(path)
+        return orig_get(path, params)
+    api._get = counting_get
+    monkeypatch.setattr(keyread, "capable", lambda stdin: 5)
+    monkeypatch.setattr(keyread, "read_key", lambda stdin: "q")
+
+    stdout, stderr = io.StringIO(), io.StringIO()
+    out = Output(today=dt.date(2026, 9, 1), stdout=stdout, stderr=stderr)
+    # `Config()`'s default `show_team_on_map` is "following".
+    code = cmd_map(Ctx(out, Config(), api, catalog, Args()),
+                   stdin=io.StringIO())
+    assert code == ExitCode.OK
+    assert calls.count("booking-list") == 1
+    assert calls.count("booking-summary") == 1
 
 
 def test_run_live_shows_the_legend_on_the_header_line(tmp_path):
