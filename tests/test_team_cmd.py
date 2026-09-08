@@ -10,6 +10,7 @@ import io
 
 import pytest
 
+from fs_cli.catalog import Catalog
 from fs_cli.commands.team_cmd import cmd_team
 from fs_cli.config import Config, load
 from fs_cli.errors import ExitCode, NotFound, UsageError
@@ -57,6 +58,11 @@ class Ctx:
     def __init__(self, out, config, directory, args, api):
         self.out, self.config, self.directory = out, config, directory
         self.args, self.api = args, api
+        # `resolve_team_membership`'s `following` branch reads
+        # `ctx.catalog.followed()` -- a real `Catalog` over the same
+        # `FakeApi` works fine here since nothing in `cmd_team` touches
+        # any of its other (desk-fetching) methods.
+        self.catalog = Catalog(api, cache=None)
 
 
 def run(config, args, directory, json_mode=False, api=None):

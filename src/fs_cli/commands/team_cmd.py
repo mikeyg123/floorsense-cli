@@ -99,10 +99,13 @@ def _team_saver(cfg, directory, out, name, uid, member_name, add):
 
 # -- server-backed `following` ---------------------------------------------
 
-def _current_following(api):
-    summary = api.booking_summary(days=1) or {}
-    users = [u for u in (summary.get("users") or []) if isinstance(u, dict)]
-    return [(u.get("uid"), u.get("name") or u.get("uid")) for u in users]
+def _current_following(catalog):
+    """`catalog.followed()` -- routed through `Catalog` rather than a
+    direct `api.booking_summary(days=1)` call so this shares a fetch
+    with `list_cmd.own_bookings`'s own, wider-window call when one has
+    already happened this run (`map_cmd.py`'s common case: `own_bookings`
+    then, moments later, `show_team_on_map`'s default `following`)."""
+    return catalog.followed()
 
 
 # -- picking a backend -----------------------------------------------------
@@ -119,7 +122,7 @@ def resolve_team_membership(ctx, name):
 
         def follow_remove(uid, _label):
             return lambda: api.friend_delete(uid)
-        return _current_following(api), follow_add, follow_remove
+        return _current_following(ctx.catalog), follow_add, follow_remove
 
     def team_add(uid, label):
         return _team_saver(cfg, ctx.directory, out, name, uid, label, add=True)

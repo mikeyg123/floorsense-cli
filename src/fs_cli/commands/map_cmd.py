@@ -662,7 +662,8 @@ def _covering_desk_keys(bookings, target_date):
     return {b["key"] for b in covering if b.get("key")}
 
 
-def resolve_floor(api, catalog, today, target_date, explicit_planid):
+def resolve_floor(api, catalog, today, target_date, explicit_planid,
+                  bookings=None):
     """`(planid, highlight_keys)`.
 
     `explicit_planid` given: no fallback search; highlight only if a
@@ -674,9 +675,13 @@ def resolve_floor(api, catalog, today, target_date, explicit_planid):
     highlight (`DEFAULT_PLANID` is the last resort, only when
     `catalog.planids()` has nothing at all).
 
-    Fetches `own_bookings` once, reused for both checks.
+    Fetches `own_bookings` once, reused for both checks -- unless
+    `bookings` is given (`cmd_map` already has it, and needs the exact
+    same fetch again for `_run_live`'s entry; passing it through here is
+    what stops a second `own_bookings` call being wasted on this one).
     """
-    bookings = own_bookings(api, today)
+    bookings = (own_bookings(api, today, catalog=catalog) if bookings is None
+               else bookings)
     covering_keys = _covering_desk_keys(bookings, target_date)
 
     if explicit_planid is not None:
@@ -853,8 +858,15 @@ def cmd_map(ctx, stdin=None):
     # this command never prints a raw desk key through `out.fmt_desk`, so
     # `Output.tags` is never read.
 
+    # Fetched once and threaded through to `resolve_floor` and (for the
+    # live view) `_run_live` -- both used to independently re-fetch this,
+    # doubling `own_bookings`'s own `booking-list`/`booking-summary`
+    # calls on every single `fs map` invocation for no reason: nothing
+    # between the two fetches could have changed what's booked.
+    bookings = own_bookings(api, out.today, catalog=catalog)
     planid, highlight_keys = resolve_floor(api, catalog, out.today,
-                                           target_date, explicit_planid)
+                                           target_date, explicit_planid,
+                                           bookings=bookings)
 
     polys = catalog.deskpolys(planid)
     catalog_keys = {d.key for d in catalog.desks() if d.planid == planid}
@@ -901,7 +913,8 @@ def cmd_map(ctx, stdin=None):
                          group_keys=group_keys, rows=rows,
                          team_uids=team_uids, match_uids=match_uids,
                          term_size=lambda: terminal_size(sys.stdout),
-                         team_label=team_label, match_label=match_label)
+                         team_label=team_label, match_label=match_label,
+                         bookings=bookings)
     return _run_static(out, grid, highlight_positions, desk_kind_positions,
                        columns, team_label=team_label,
                        match_label=match_label)
@@ -1179,7 +1192,7 @@ def _refresh(ctx, planid, target_date, team_uids=frozenset(),
     re-resolved -- `_run_live` resolves them once on the way in, same as
     `group_keys`."""
     out, api, catalog = ctx.out, ctx.api, ctx.catalog
-    bookings = own_bookings(api, out.today)
+    bookings = own_bookings(api, out.today, catalog=catalog)
     covering_keys = _covering_desk_keys(bookings, target_date)
     highlight_keys = {k for k in covering_keys
                       if (catalog.desk_by_key(k) or _NO_DESK).planid == planid}
@@ -1283,7 +1296,7 @@ def _run_live(ctx, planid, target_date, grid, highlight_positions,
               stdin=None, read_key=None, initial_cursor_key=None,
               desk_states=None, spawn=None, group_keys=(), rows=None,
               team_uids=frozenset(), match_uids=frozenset(), term_size=None,
-              team_label=None, match_label=None):
+              team_label=None, match_label=None, bookings=None):
     """The redraw loop behind arrow-key navigation and book/release from
     `fs map`'s live view. Kept thin: which desk an arrow lands on, what
     Enter means, is delegated to `nearest_desk`/`plan_for_cursor` -- this
@@ -1322,6 +1335,13 @@ def _run_live(ctx, planid, target_date, grid, highlight_positions,
     `team_label`/`match_label` are `cmd_map`'s real `show_team_on_map`
     name / typed match target -- passed through to `header_line`'s
     embedded legend on every frame, never re-derived here.
+
+    `bookings`, when given, is `cmd_map`'s own already-fetched
+    `own_bookings` result -- skips this call's own otherwise-redundant
+    re-fetch (`own_bookings` calls `booking-list` AND `booking-summary`,
+    so a second fetch moments after `cmd_map`'s is a full extra round
+    trip on every live-view entry for data that cannot have changed in
+    between). `None` (every direct/test call) still fetches it here.
     """
     out, api, catalog = ctx.out, ctx.api, ctx.catalog
     bg_api = _occupant_api(ctx)
@@ -1344,7 +1364,8 @@ def _run_live(ctx, planid, target_date, grid, highlight_positions,
     # `5`/`6`.
     nav_hint = _nav_hint_for(floor_tokens)
     book_day_start = catalog.book_day_start_mins()
-    bookings = own_bookings(api, out.today)
+    bookings = (own_bookings(api, out.today, catalog=catalog)
+               if bookings is None else bookings)
     try:
         own_uid = catalog.own_uid()
     except Exception:                             # noqa: BLE001
