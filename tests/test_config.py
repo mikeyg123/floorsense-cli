@@ -11,9 +11,10 @@ import stat
 import pytest
 
 from fs_cli.auth import FLOORSENSE_ORIGIN
-from fs_cli.config import (Config, DEFAULT_GROUP_NAME,
-                           DEFAULT_SHOW_TEAM_ON_MAP, cache_filename,
-                           default_email, guess_okta_user, load, save)
+from fs_cli.config import (Config, DEFAULT_DAY_OPENING_TIME,
+                           DEFAULT_GROUP_NAME, DEFAULT_SHOW_TEAM_ON_MAP,
+                           cache_filename, default_email, guess_okta_user,
+                           load, save)
 
 
 def cfg_dir(tmp_path):
@@ -90,52 +91,6 @@ def test_default_group_defaults_when_config_toml_predates_the_setting(
         '[identity]\nokta_user = "jamie.baker"\n\n[preferences]\n')
     assert load(d).default_group == DEFAULT_GROUP_NAME
     assert load(d).show_team_on_map == DEFAULT_SHOW_TEAM_ON_MAP
-
-
-def test_missing_show_team_on_map_is_backfilled_to_disk_with_a_note(tmp_path):
-    """Discoverability: a config.toml predating `show_team_on_map` gets the
-    setting written into the file with its default, not just filled in
-    in-memory -- same "repaired on every load, with a note" philosophy as
-    permission repair (see module docstring), so a user who never knew the
-    setting existed finds it next time they open config.toml."""
-    d = cfg_dir(tmp_path)
-    path = d / "config.toml"
-    path.write_text('[identity]\nokta_user = "jamie.baker"\n\n'
-                    '[preferences]\n')
-    os.chmod(d, 0o700)
-    os.chmod(path, 0o600)
-
-    notes = []
-    load(d, on_repair=notes.append)
-
-    assert 'show_team_on_map = "following"' in path.read_text()
-    assert any("show_team_on_map" in n for n in notes)
-
-
-def test_show_team_on_map_backfill_leaves_an_explicit_value_alone(tmp_path):
-    d = cfg_dir(tmp_path)
-    path = d / "config.toml"
-    path.write_text('[identity]\nokta_user = "jamie.baker"\n\n'
-                    '[preferences]\nshow_team_on_map = "crew"\n')
-    os.chmod(d, 0o700)
-    os.chmod(path, 0o600)
-
-    notes = []
-    load(d, on_repair=notes.append)
-
-    assert 'show_team_on_map = "crew"' in path.read_text()
-    assert notes == []
-
-
-def test_show_team_on_map_backfill_does_not_create_a_config_on_first_run(
-        tmp_path):
-    """No config.toml at all is the first-run signal -- must not create one
-    just to add this setting; `first_run` owns creating the file."""
-    d = cfg_dir(tmp_path)
-    notes = []
-    load(d, on_repair=notes.append)
-    assert not (d / "config.toml").exists()
-    assert notes == []
 
 
 # --- cache_filename: origin-scoped so `--url` can't reuse another
@@ -272,13 +227,13 @@ def _at(hh, mm):
     return dt.datetime.combine(TODAY, dt.time(hh, mm))
 
 
-def test_day_opening_time_defaults_to_none_and_is_never_saved(tmp_path):
+def test_day_opening_time_defaults_and_is_always_saved(tmp_path):
     d = cfg_dir(tmp_path)
     c = Config(okta_user="jamie.baker")
-    assert c.day_opening_time is None
+    assert c.day_opening_time == DEFAULT_DAY_OPENING_TIME == "08:05"
     save(c, d)
     text = (d / "config.toml").read_text()
-    assert "day_opening_time" not in text
+    assert 'day_opening_time = "08:05"' in text
 
 
 def test_day_opening_time_is_preserved_when_hand_added(tmp_path):
@@ -293,14 +248,19 @@ def test_day_opening_time_is_preserved_when_hand_added(tmp_path):
     assert 'day_opening_time = "07:00"' in (d / "config.toml").read_text()
 
 
-def test_day_opening_time_absent_stays_absent_through_a_save_cycle(tmp_path):
+def test_day_opening_time_missing_key_loads_as_the_default_and_gets_written(
+        tmp_path):
+    """A hand-edited config.toml with no `day_opening_time` key must not
+    crash `load()` -- it falls back to `DEFAULT_DAY_OPENING_TIME`, same
+    tolerance as a missing `book_ahead_days`, and the next save writes it
+    in like every other preference."""
     d = cfg_dir(tmp_path)
-    c = Config(okta_user="jamie.baker", office_days=["monday"])
+    (d / "config.toml").write_text(
+        '[identity]\nokta_user = "jamie.baker"\n\n[preferences]\n')
+    c = load(d)
+    assert c.day_opening_time == DEFAULT_DAY_OPENING_TIME
     save(c, d)
-    reloaded = load(d)
-    assert reloaded.day_opening_time is None
-    save(reloaded, d)
-    assert "day_opening_time" not in (d / "config.toml").read_text()
+    assert 'day_opening_time = "08:05"' in (d / "config.toml").read_text()
 
 
 def test_classify_booking_date_rejects_a_past_date():

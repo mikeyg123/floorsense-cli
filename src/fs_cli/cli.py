@@ -319,8 +319,7 @@ fs status
     book_ahead_days, default_group, and your configured desk groups.
 
     Read-only -- no changes other than fixing config.toml itself
-    (permissions, or backfilling a setting missing from an older
-    config.toml). Never touches session.json/cache.json or the API.
+    (permissions). Never touches session.json/cache.json or the API.
     Takes no parameters -- passing --date/--desk/--name/--group/--all is
     a usage error, not a silent no-op."""),
     "list": _CommandHelp(
