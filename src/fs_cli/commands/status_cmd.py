@@ -5,12 +5,11 @@ Follows the same `commands/` module-per-command shape as every other
 command.
 
 The one exception is `config.toml` itself: `cli.main()`'s unconditional
-`config.load()` may repair loose permissions or backfill a missing
-setting (e.g. `show_team_on_map`) on ANY command, `fs status` included --
-same "repaired on every load, with a note" contract `config.py` documents
-for every command, not something this command opts into or could opt out
-of. Session/cache/API side effects are what this docstring promises none
-of.
+`config.load()` may repair loose permissions on ANY command, `fs status`
+included -- same "repaired on every load, with a note" contract
+`config.py` documents for every command, not something this command opts
+into or could opt out of. Session/cache/API side effects are what this
+docstring promises none of.
 """
 
 from importlib.metadata import version
@@ -27,7 +26,7 @@ def cmd_status(ctx):
     """Identity and session validity. Never logs in -- `fs status`
     reporting "not logged in" must not be the thing that makes you log
     in -- and never writes session.json/cache.json or calls the API.
-    (config.toml's own load-time repair/backfill is `config.py`'s
+    (config.toml's own load-time permission repair is `config.py`'s
     contract on every command, this one included -- see the module
     docstring.)"""
     out, cfg = ctx.out, ctx.config

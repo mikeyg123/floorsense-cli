@@ -37,7 +37,8 @@ from .errors import UsageError
 __all__ = ["Config", "config_dir", "cache_filename", "load", "save",
            "guess_okta_user", "default_email", "DEFAULT_ORG",
            "DEFAULT_DOMAIN", "DEFAULT_GROUP_NAME",
-           "DEFAULT_SHOW_TEAM_ON_MAP", "BOOKING_BLOCK_REASONS"]
+           "DEFAULT_SHOW_TEAM_ON_MAP", "DEFAULT_DAY_OPENING_TIME",
+           "BOOKING_BLOCK_REASONS"]
 
 #: Placeholders, not a working default for any deployment -- every Okta
 #: org/domain differs, so these are only a stand-in that keeps
@@ -55,6 +56,9 @@ DEFAULT_GROUP_NAME = "preferred"
 #: `fs map`'s `show_team_on_map` default -- the reserved, server-backed
 #: team name (`team_cmd.FOLLOWING`; not imported here to avoid a cycle).
 DEFAULT_SHOW_TEAM_ON_MAP = "following"
+
+#: The cutoff after which today can no longer be booked (§ `_opening_time`).
+DEFAULT_DAY_OPENING_TIME = "08:05"
 
 DIR_MODE = 0o700
 FILE_MODE = 0o600
@@ -123,7 +127,7 @@ class Config:
     #: reserved `following`. A name matching neither just highlights
     #: nothing -- see `map_cmd.resolve_team_uids`.
     show_team_on_map: str = DEFAULT_SHOW_TEAM_ON_MAP
-    day_opening_time: str = None
+    day_opening_time: str = DEFAULT_DAY_OPENING_TIME
     #: False when no config.toml was on disk -- triggers first-run setup.
     exists: bool = False
 
@@ -162,14 +166,18 @@ class Config:
                                       self.day_opening_time)
 
 
-_DEFAULT_OPENING_TIME = dt.time(8, 28)
+def _parse_time(value):
+    h, m = value.split(":")
+    return dt.time(int(h), int(m))
+
+
+_DEFAULT_OPENING_TIME = _parse_time(DEFAULT_DAY_OPENING_TIME)
 
 
 def _opening_time(day_opening_time):
     if day_opening_time:
         try:
-            h, m = day_opening_time.split(":")
-            return dt.time(int(h), int(m))
+            return _parse_time(day_opening_time)
         except (TypeError, ValueError):
             pass
     return _DEFAULT_OPENING_TIME
@@ -234,9 +242,8 @@ def ensure_dir(directory, on_repair=None):
 # --------------------------------------------------------------------------
 
 def load(directory=None, on_repair=None):
-    """Read `config.toml`, repairing permissions and backfilling a
-    missing setting (e.g. `show_team_on_map`) on the way past -- both are
-    `config.toml`-only writes, on every command that calls `load()`
+    """Read `config.toml`, repairing permissions on the way past -- a
+    `config.toml`-only write, on every command that calls `load()`
     (`fs status` included), never session.json/cache.json and never an
     API call. A missing file is the first-run signal, not an error --
     comes back as a default Config with `exists=False`."""
@@ -272,20 +279,10 @@ def load(directory=None, on_repair=None):
                                    DEFAULT_SHOW_TEAM_ON_MAP),
         groups={k: list(v) for k, v in (raw.get("groups") or {}).items()},
         teams={k: list(v) for k, v in (raw.get("teams") or {}).items()},
-        day_opening_time=prefs.get("day_opening_time"),
+        day_opening_time=prefs.get("day_opening_time",
+                                   DEFAULT_DAY_OPENING_TIME),
         exists=True,
     )
-
-    # A config.toml predating `show_team_on_map` gets it written in with
-    # its default, not just filled in in-memory -- same "repaired on
-    # every load, with a note" philosophy as the permission repair above,
-    # so a user who never knew the setting existed finds it in the file.
-    if "show_team_on_map" not in prefs:
-        save(cfg, directory, on_repair=on_repair)
-        if on_repair:
-            on_repair(f"Added new setting to {path}: "
-                      f'show_team_on_map = "{cfg.show_team_on_map}" '
-                      f"-- controls whose desks fs map highlights.")
 
     return cfg
 
@@ -308,12 +305,11 @@ def save(config, directory=None, on_repair=None):
             "book_ahead_days": int(config.book_ahead_days),
             "default_group": config.default_group,
             "show_team_on_map": config.show_team_on_map,
+            "day_opening_time": config.day_opening_time,
         },
         "groups": {k: list(v) for k, v in (config.groups or {}).items()},
         "teams": {k: list(v) for k, v in (config.teams or {}).items()},
     }
-    if config.day_opening_time is not None:
-        doc["preferences"]["day_opening_time"] = config.day_opening_time
 
     # 0600 from the moment it exists, rather than written-then-chmodded.
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, FILE_MODE)
