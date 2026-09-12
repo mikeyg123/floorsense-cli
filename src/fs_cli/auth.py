@@ -15,19 +15,22 @@ Floorsense exchange). Four traps to know before touching this file:
 """
 
 import getpass
+import os
 import re
+import stat
 import time
 from urllib.parse import quote, urlparse
 
 import keyring
 import requests
 
-from .errors import AuthFailed, CommError, InvalidCredentials, LoginRequired
+from .errors import (AuthFailed, CommError, InvalidCredentials,
+                     LoginRequired, UsageError)
 
 __all__ = ["KEYCHAIN_SERVICE", "get_password", "store_password",
-           "has_stored_password", "forget_password", "login_with_push_mfa",
-           "floorsense_login", "discover_okta_org", "scrape_csrf",
-           "okta_origin", "cookies_for", "FLOORSENSE_ORIGIN",
+           "has_stored_password", "forget_password", "read_password_file",
+           "login_with_push_mfa", "floorsense_login", "discover_okta_org",
+           "scrape_csrf", "okta_origin", "cookies_for", "FLOORSENSE_ORIGIN",
            "FLOORSENSE_HOST"]
 
 KEYCHAIN_SERVICE = "floorsense-okta"
@@ -152,6 +155,41 @@ def forget_password(username, aliases=(), origin=FLOORSENSE_ORIGIN):
             # NoKeyringError: nothing reachable to delete from either --
             # a forget, not a save, so nothing for the user to act on.
             pass
+
+
+def read_password_file(path):
+    """`--pw-file`: password source for a scheduled task with no keychain
+    access. Refuses a group/other-readable file. `fstat`s the open fd
+    rather than `stat`ing the path, so a symlink can't swap in a looser
+    target between the check and the read.
+    """
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except FileNotFoundError as e:
+        raise UsageError(f"password file {path} does not exist",
+                         hint="Check the path, or drop --pw-file to use "
+                              "the OS keychain instead.") from e
+    except OSError as e:
+        raise UsageError(f"can't read password file {path}: {e}") from e
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise UsageError(f"password file {path} is not a regular file")
+        mode = stat.S_IMODE(st.st_mode)
+        if mode & 0o077:
+            raise UsageError(
+                f"password file {path} has loose permissions "
+                f"({mode:04o})",
+                hint=f"Run `chmod 600 {path}` so only you can read it.")
+        content = os.fdopen(fd).read()
+        fd = None   # now owned by the fdopen()'d file object
+    finally:
+        if fd is not None:
+            os.close(fd)
+    content = content.strip()
+    if not content:
+        raise UsageError(f"password file {path} is empty")
+    return content
 
 
 # --------------------------------------------------------------------------
