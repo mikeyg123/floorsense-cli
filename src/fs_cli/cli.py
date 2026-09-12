@@ -86,6 +86,11 @@ def build_parser():
                         "login succeeds; forces a fresh login (and MFA "
                         "push) even if a session is already cached, and "
                         "cannot be used with `fs status`")
+    p.add_argument("--pw-file", metavar="PATH",
+                   help="read the Okta password from this file instead of "
+                        "the OS keychain; the file must be readable only "
+                        "by you, and is never read at all if a cached "
+                        "session is still live")
     p.add_argument("--all", action="store_true",
                    help="[fs release] release every own booking from today "
                         "forward, same as the 'all' argument")
@@ -235,15 +240,19 @@ def _resolve_identity(out, args, directory, cfg):
 # --------------------------------------------------------------------------
 
 def make_password_provider(out, save=False, prompt=getpass.getpass,
-                           origin=auth.FLOORSENSE_ORIGIN):
+                           origin=auth.FLOORSENSE_ORIGIN, pw_file=None):
     """`--save-password` always prompts for a fresh password rather than
     reusing a stored one -- it's usually typed to replace one that
     stopped working. Storing happens in `session.py`'s
     `on_login_success`, once login is confirmed, not here. `origin`
     scopes the keychain lookup so a `--url` override can't read a
-    different deployment's stored password.
+    different deployment's stored password. `pw_file` reads the password
+    from inside this closure, so it's only touched when a login actually
+    happens, not merely because the flag was passed.
     """
     def provider(okta_user):
+        if pw_file:
+            return auth.read_password_file(pw_file)
         if save:
             return prompt(f"Okta password for {okta_user}: ")
         return auth.get_password(okta_user, prompt=prompt, origin=origin)
@@ -253,9 +262,9 @@ def make_password_provider(out, save=False, prompt=getpass.getpass,
 def _forget_on_invalid_credentials(out, origin=auth.FLOORSENSE_ORIGIN):
     """`Session.on_invalid_credentials`: Okta rejected the password, so a
     stored copy is confirmed dead -- forget it so the next run prompts
-    fresh. Only wired when `--save-password` was NOT given (that flag
-    never reads the keychain, so a failure there is a typo, not proof
-    the stored one is bad)."""
+    fresh. Only wired when neither `--save-password` nor `--pw-file` was
+    given -- neither reads the keychain, so a failure there says nothing
+    about a stored password's validity."""
     def on_invalid_credentials(okta_user):
         if auth.has_stored_password(okta_user, origin=origin):
             auth.forget_password(okta_user, origin=origin)
@@ -800,6 +809,11 @@ def main(argv=None, directory=None):
                              "each other",
                              hint="--save-password needs to log in to "
                                   "confirm the password; drop one flag.")
+        if args.pw_file and args.save_password:
+            raise UsageError(
+                "--pw-file and --save-password contradict each other",
+                hint="--pw-file already bypasses the keychain; drop "
+                     "--save-password.")
 
         cfg = config_mod.load(directory, on_repair=out.warn)
         cfg, url_changed = _resolve_identity(out, args, directory, cfg)
@@ -817,11 +831,12 @@ def main(argv=None, directory=None):
             on_message=out.warn,
             allow_login=not args.no_login,
             password_provider=make_password_provider(out, args.save_password,
-                                                     origin=origin),
+                                                     origin=origin,
+                                                     pw_file=args.pw_file),
             origin=origin,
-            on_invalid_credentials=None if args.save_password
-                                  else _forget_on_invalid_credentials(
-                                      out, origin=origin),
+            on_invalid_credentials=None
+            if args.save_password or args.pw_file
+            else _forget_on_invalid_credentials(out, origin=origin),
             on_login_success=on_success,
             # A URL change (stale session from the old deployment) and
             # --save-password both force a fresh login regardless of cache.

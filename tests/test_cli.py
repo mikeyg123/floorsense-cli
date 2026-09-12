@@ -502,6 +502,30 @@ def test_without_save_password_the_keychain_is_used_first(monkeypatch):
     assert provider("jamie.baker") == "from-keychain"
 
 
+# --- --pw-file bypasses the keychain entirely ------------------------------
+
+def test_pw_file_is_read_instead_of_the_keychain(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        auth, "get_password",
+        lambda *a, **k: pytest.fail("must not read the keychain"))
+    path = tmp_path / "pw"
+    path.write_text("hunter2\n")
+    path.chmod(0o600)
+    provider = make_password_provider(
+        Output(today=None), pw_file=str(path),
+        prompt=lambda _msg: pytest.fail("must not prompt"))
+    assert provider("jamie.baker") == "hunter2"
+
+
+def test_pw_file_bad_permissions_is_a_usage_error(monkeypatch, tmp_path):
+    path = tmp_path / "pw"
+    path.write_text("hunter2\n")
+    path.chmod(0o644)
+    provider = make_password_provider(Output(today=None), pw_file=str(path))
+    with pytest.raises(UsageError, match="loose permissions"):
+        provider("jamie.baker")
+
+
 # --- storing only on confirmed login, forgetting only on a bad password ---
 
 def test_store_on_login_success_stores_only_when_save_was_requested(monkeypatch):
@@ -615,6 +639,36 @@ def test_without_save_password_force_login_is_false(cfgdir, monkeypatch):
     monkeypatch.setattr(cli_mod, "Session", _CapturingSession)
     main(["status"], directory=cfgdir)
     assert _CapturingSession.captured["force_login"] is False
+
+
+def test_pw_file_disables_forget_on_invalid_credentials(cfgdir, monkeypatch):
+    from fs_cli import cli as cli_mod
+    monkeypatch.setattr(cli_mod, "Session", _CapturingSession)
+    main(["--pw-file", "/tmp/does-not-matter", "list"], directory=cfgdir)
+    assert _CapturingSession.captured["on_invalid_credentials"] is None
+
+
+def test_pw_file_does_not_force_a_fresh_login(cfgdir, monkeypatch):
+    from fs_cli import cli as cli_mod
+    monkeypatch.setattr(cli_mod, "Session", _CapturingSession)
+    main(["--pw-file", "/tmp/does-not-matter", "list"], directory=cfgdir)
+    assert _CapturingSession.captured["force_login"] is False
+
+
+def test_pw_file_with_save_password_is_a_usage_error(cfgdir, monkeypatch):
+    from fs_cli import cli as cli_mod
+    monkeypatch.setattr(cli_mod, "Session", _CapturingSession)
+    _CapturingSession.captured = None
+    assert main(["--pw-file", "/tmp/does-not-matter", "--save-password",
+                "list"], directory=cfgdir) == ExitCode.USAGE
+    assert _CapturingSession.captured is None
+
+
+def test_pw_file_with_status_is_not_a_usage_error(cfgdir, monkeypatch):
+    from fs_cli import cli as cli_mod
+    monkeypatch.setattr(cli_mod, "Session", _CapturingSession)
+    assert main(["--pw-file", "/tmp/does-not-matter", "status"],
+               directory=cfgdir) == ExitCode.OK
 
 
 def test_save_password_with_status_is_a_usage_error(cfgdir, monkeypatch):

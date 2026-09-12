@@ -9,10 +9,14 @@ each other's password. No network, no real keyring -- a dict stands in for
 the OS keychain.
 """
 
+import os
+import stat
+
 import keyring.errors
 import pytest
 
 from fs_cli import auth
+from fs_cli.errors import UsageError
 
 
 class FakeKeyring:
@@ -102,3 +106,77 @@ def test_forget_password_only_clears_the_matching_origin(fake_keyring):
                                     origin=auth.FLOORSENSE_ORIGIN)
     assert not auth.has_stored_password("jamie.baker",
                                         origin="https://other.example")
+
+
+# --- read_password_file (--pw-file) -------------------------------------
+
+def _pw_file(tmp_path, content, mode=0o600):
+    path = tmp_path / "pw"
+    path.write_text(content)
+    path.chmod(mode)
+    return path
+
+
+def test_read_password_file_strips_the_trailing_newline(tmp_path):
+    path = _pw_file(tmp_path, "hunter2\n")
+    assert auth.read_password_file(str(path)) == "hunter2"
+
+
+def test_read_password_file_handles_no_trailing_newline(tmp_path):
+    path = _pw_file(tmp_path, "hunter2")
+    assert auth.read_password_file(str(path)) == "hunter2"
+
+
+def test_read_password_file_strips_a_crlf_line_ending(tmp_path):
+    path = _pw_file(tmp_path, "hunter2\r\n")
+    assert auth.read_password_file(str(path)) == "hunter2"
+
+
+def test_read_password_file_strips_a_trailing_blank_line_too(tmp_path):
+    path = _pw_file(tmp_path, "hunter2\n\n")
+    assert auth.read_password_file(str(path)) == "hunter2"
+
+
+def test_read_password_file_strips_leading_and_trailing_spaces(tmp_path):
+    path = _pw_file(tmp_path, "  hunter2  \n")
+    assert auth.read_password_file(str(path)) == "hunter2"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits only")
+@pytest.mark.parametrize("mode", [0o644, 0o640, 0o604, 0o660])
+def test_read_password_file_refuses_group_or_other_readable(tmp_path, mode):
+    path = _pw_file(tmp_path, "hunter2\n", mode=mode)
+    with pytest.raises(UsageError, match="loose permissions"):
+        auth.read_password_file(str(path))
+
+
+def test_read_password_file_missing_file_is_a_usage_error(tmp_path):
+    with pytest.raises(UsageError, match="does not exist"):
+        auth.read_password_file(str(tmp_path / "nope"))
+
+
+def test_read_password_file_a_directory_is_a_usage_error(tmp_path):
+    with pytest.raises(UsageError, match="not a regular file"):
+        auth.read_password_file(str(tmp_path))
+
+
+def test_read_password_file_empty_file_is_a_usage_error(tmp_path):
+    path = _pw_file(tmp_path, "")
+    with pytest.raises(UsageError, match="is empty"):
+        auth.read_password_file(str(path))
+
+
+def test_read_password_file_permission_error_mentions_the_path(tmp_path):
+    path = _pw_file(tmp_path, "hunter2\n")
+    path.chmod(0o000)
+    try:
+        with pytest.raises(UsageError, match=str(path)):
+            auth.read_password_file(str(path))
+    finally:
+        path.chmod(0o600)   # so pytest can clean up tmp_path afterwards
+
+
+def test_read_password_file_good_permissions_are_accepted(tmp_path):
+    path = _pw_file(tmp_path, "hunter2\n", mode=0o600)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert auth.read_password_file(str(path)) == "hunter2"
