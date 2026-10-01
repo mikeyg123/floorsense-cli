@@ -15,7 +15,7 @@ from collections import namedtuple
 from importlib.metadata import version
 from importlib.resources import files
 
-from . import auth, config as config_mod
+from . import auth, completion, config as config_mod
 from .api import LiveApi
 from .catalog import Catalog, CacheStore
 from .commands.at_cmd import cmd_at
@@ -607,6 +607,19 @@ fs help [<command>]
     full grammar.
 
     fs --help / fs -h (with or without a command) are the same thing.""")
+# Also not in COMMANDS/HANDLERS, same reasoning as `help` above -- it
+# needs no Context/session, so `main` special-cases it before dispatch.
+COMMAND_HELP["completion"] = _CommandHelp(
+    "fs completion <bash|zsh|fish>",
+    "Print a shell completion script for bash, zsh, or fish.",
+    """\
+fs completion <bash|zsh|fish>
+
+    Prints a completion script to stdout, with install instructions
+    as comments at the top (where to save it / how to source it).
+    Completes subcommand names and flags only, generated from fs's
+    own command and option list -- rerun after upgrading fs to pick
+    up anything new.""")
 
 #: `fs help`'s trailing "Examples:" section: `(command, comment)` pairs,
 #: word-wrapped at print time (`_wrapped`). `EXAMPLES = ()` drops the
@@ -644,7 +657,9 @@ EXAMPLES: tuple[tuple[str, str], ...] = (
     ("fs at 2.123 3rd",
      "see who's sitting at a desk/group on a date"),
     ("fs help book",
-     "full help for a single command")
+     "full help for a single command"),
+    ("fs completion zsh",
+     "generate a zsh completion script")
 
 )
 
@@ -793,6 +808,20 @@ def main(argv=None, directory=None):
 
         if args.command == "help":
             print_command_help(out, args.args)
+            out.finish()
+            return ExitCode.OK
+
+        if args.command == "completion":
+            shell = (args.args[0] if args.args else "").strip().lower()
+            if shell not in completion.SHELLS:
+                raise UsageError(
+                    f"unknown shell {shell!r}" if shell
+                    else "a shell name is required",
+                    hint=f"Try one of: {', '.join(completion.SHELLS)}.")
+            commands = COMMANDS + ("help", "completion")
+            flags = sorted({s for a in parser._actions
+                            for s in a.option_strings})
+            out.print(completion.render(shell, commands, flags))
             out.finish()
             return ExitCode.OK
 
